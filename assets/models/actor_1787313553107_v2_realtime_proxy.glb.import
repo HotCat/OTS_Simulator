@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://d2o0dak5fvq2v"
-path="res://.godot/imported/IK_arm.glb-06d91231164cd590e10e882efc75fbdc.scn"
+uid="uid://d23nf1vbq61s6"
+path="res://.godot/imported/actor_1787313553107_v2_realtime_proxy.glb-642470b47aa7a4d22a0a53c98bb26884.scn"
 
 [deps]
 
-source_file="res://assets/models/IK_arm.glb"
-dest_files=["res://.godot/imported/IK_arm.glb-06d91231164cd590e10e882efc75fbdc.scn"]
+source_file="res://assets/models/actor_1787313553107_v2_realtime_proxy.glb"
+dest_files=["res://.godot/imported/actor_1787313553107_v2_realtime_proxy.glb-642470b47aa7a4d22a0a53c98bb26884.scn"]
 
 [params]
 
@@ -30,7 +30,7 @@ meshes/light_baking=1
 meshes/lightmap_texel_size=0.2
 meshes/force_disable_compression=false
 skins/use_named_skins=true
-animation/import=true
+animation/import=false
 animation/fps=30
 animation/trimming=false
 animation/remove_immutable_tracks=true
@@ -42,4 +42,4 @@ materials/extract_path=""
 _subresources={}
 gltf/naming_version=2
 gltf/embedded_image_handling=1
-gltf/texture_map_mode=0
+gltf/texture_map_mode=1

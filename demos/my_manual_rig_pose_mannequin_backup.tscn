@@ -1,8 +1,9 @@
-[gd_scene format=3 uid="uid://etmkxmpa26ho"]
+[gd_scene format=3]
 
-[ext_resource type="Texture2D" uid="uid://2iy8weuaf8be" path="res://assets/textures/kenney_grids/Light/texture_07.png" id="1_se52a"]
-[ext_resource type="PackedScene" uid="uid://dxlybkcnfbyie" path="res://assets/models/IK_character.glb" id="2_e2cre"]
-[ext_resource type="Script" uid="uid://r1abgjkodgmk" path="res://scripts/ots_pose_controller.gd" id="3_pose"]
+[ext_resource type="Texture2D" uid="uid://2iy8weuaf8be" path="res://assets/textures/kenney_grids/Light/texture_07.png" id="1_8ekq5"]
+[ext_resource type="PackedScene" uid="uid://dxlybkcnfbyie" path="res://assets/models/IK_character.glb" id="2_q46q4"]
+[ext_resource type="Script" uid="uid://r1abgjkodgmk" path="res://scripts/ots_pose_controller.gd" id="3_njk0r"]
+[ext_resource type="Script" uid="uid://dosa0bgb2gh6k" path="res://scripts/orbit_camera_controller.gd" id="4_camera"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_m0rpm"]
 sky_horizon_color = Color(0.46666667, 0.4862745, 0.5058824, 1)
@@ -19,8 +20,23 @@ glow_enabled = true
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_1xu4i"]
 albedo_color = Color(0.32172796, 0.32172796, 0.32172796, 1)
-albedo_texture = ExtResource("1_se52a")
+albedo_texture = ExtResource("1_8ekq5")
 uv1_triplanar = true
+
+[sub_resource type="StandardMaterial3D" id="WaistWallMaterial"]
+albedo_color = Color(0.13, 0.3, 0.48, 1)
+metallic = 0.08
+roughness = 0.72
+
+[sub_resource type="StandardMaterial3D" id="FieldCubeMaterial"]
+albedo_color = Color(0.38, 0.19, 0.11, 1)
+metallic = 0.04
+roughness = 0.82
+
+[sub_resource type="StandardMaterial3D" id="FieldPillarMaterial"]
+albedo_color = Color(0.16, 0.34, 0.27, 1)
+metallic = 0.08
+roughness = 0.7
 
 [node name="world" type="Node3D" unique_id=1534360198]
 
@@ -38,7 +54,7 @@ material_override = SubResource("StandardMaterial3D_1xu4i")
 use_collision = true
 
 [node name="CSGBox3D" type="CSGBox3D" parent="stage" unique_id=400722263]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.48393917, -0.36090958, -0.92916167)
 use_collision = true
 size = Vector3(100, 1, 100)
 
@@ -62,12 +78,97 @@ transform = Transform3D(0.12154446, 0.89712083, 0.42473677, -0.9407354, 0.240609
 use_collision = true
 size = Vector3(3, 3, 3)
 
+[node name="WaistSupportWall" type="CSGBox3D" parent="." unique_id=2127454840]
+editor_description = "Thin waist-height support for staging the mannequin as draped over a carrier's shoulder/back. Move this node to line its top edge up with the abdomen."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.67403316, 0.23242429)
+use_collision = true
+size = Vector3(0.92, 1.22, 0.1)
+material = SubResource("WaistWallMaterial")
+
+[node name="AsymmetricObstacleField" type="Node3D" parent="." unique_id=103185197]
+editor_description = "Static asymmetric cubes and pillars for camera, navigation, and locomotion experiments. The center is intentionally clear for the pose setup."
+
+[node name="CubeNearLeft" type="CSGBox3D" parent="AsymmetricObstacleField" unique_id=621468303]
+transform = Transform3D(0.9563048, 0, 0.2923717, 0, 1, 0, -0.2923717, 0, 0.9563048, -1.85, 0.34, 1.7)
+use_collision = true
+size = Vector3(0.76, 0.68, 0.92)
+material = SubResource("FieldCubeMaterial")
+
+[node name="CubeFarRight" type="CSGBox3D" parent="AsymmetricObstacleField" unique_id=579349096]
+transform = Transform3D(0.8746197, 0, -0.4848096, 0, 1, 0, 0.4848096, 0, 0.8746197, 3.25, 0.42, -2.45)
+use_collision = true
+size = Vector3(0.9, 0.84, 0.68)
+material = SubResource("FieldCubeMaterial")
+
+[node name="CubeBackCluster" type="CSGBox3D" parent="AsymmetricObstacleField" unique_id=511791919]
+transform = Transform3D(0.9864998, 0.08630754, 0.1391731, -0.08715574, 0.9961947, 0, -0.13864352, -0.012129734, 0.99026805, -3.4, 0.65, -3.1)
+use_collision = true
+size = Vector3(1, 1.3, 0.9)
+material = SubResource("FieldCubeMaterial")
+
+[node name="CubeLowFrontRight" type="CSGBox3D" parent="AsymmetricObstacleField" unique_id=1670608613]
+transform = Transform3D(0.7880108, 0, 0.6156615, 0, 1, 0, -0.6156615, 0, 0.7880108, 2.35, 0.22, 2.55)
+use_collision = true
+size = Vector3(0.68, 0.44, 1.14)
+material = SubResource("FieldCubeMaterial")
+
+[node name="CubeSmallRear" type="CSGBox3D" parent="AsymmetricObstacleField" unique_id=1930026484]
+transform = Transform3D(0.9781476, 0, -0.2079117, 0, 1, 0, 0.2079117, 0, 0.9781476, 0.85, 0.27, -3.35)
+use_collision = true
+size = Vector3(0.48, 0.54, 0.52)
+material = SubResource("FieldCubeMaterial")
+
+[node name="PillarTallLeft" type="CSGCylinder3D" parent="AsymmetricObstacleField" unique_id=91409946]
+transform = Transform3D(-0.974933, 0.22249874, 0, -0.22249874, -0.974933, 0, 0, 0, 1, -3.25, 1.629842, -1.1)
+use_collision = true
+radius = 0.3
+height = 2.4
+sides = 24
+material = SubResource("FieldPillarMaterial")
+
+[node name="PillarMidRight" type="CSGCylinder3D" parent="AsymmetricObstacleField" unique_id=1318629682]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.75, 0.75, 1.35)
+use_collision = true
+radius = 0.27
+height = 1.5
+sides = 20
+material = SubResource("FieldPillarMaterial")
+
+[node name="PillarRear" type="CSGCylinder3D" parent="AsymmetricObstacleField" unique_id=908054351]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.05, 1.12, -2.75)
+use_collision = true
+radius = 0.22
+height = 2.24
+sides = 18
+material = SubResource("FieldPillarMaterial")
+
+[node name="PillarShortFrontLeft" type="CSGCylinder3D" parent="AsymmetricObstacleField" unique_id=770049918]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.45, 0.55, 2.62)
+use_collision = true
+radius = 0.36
+height = 1.1
+sides = 24
+material = SubResource("FieldPillarMaterial")
+
+[node name="PillarSlenderFarRight" type="CSGCylinder3D" parent="AsymmetricObstacleField" unique_id=1342175986]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.65, 1.65, -3.05)
+use_collision = true
+radius = 0.18
+height = 3.3
+sides = 16
+material = SubResource("FieldPillarMaterial")
+
 [node name="Camera3D" type="Camera3D" parent="." unique_id=779950754]
 transform = Transform3D(0.5202567, -0.3929865, 0.75821805, 2.1758567e-08, 0.8878328, 0.46016616, -0.8540099, -0.23940451, 0.46190095, 1.5995471, 2.2785673, 1.4578533)
 fov = 37.6
+script = ExtResource("4_camera")
+target = Vector3(0, 1.308, 0.484)
+distance = 2.109
+pitch_degrees = 27.4
+yaw_degrees = 58.7
 
-[node name="IK_character" parent="." unique_id=1310603554 instance=ExtResource("2_e2cre")]
-script = ExtResource("3_pose")
+[node name="IK_character" parent="." unique_id=1310603554 instance=ExtResource("2_q46q4")]
+script = ExtResource("3_njk0r")
 
 [node name="pelvis_control" type="CopyTransformModifier3D" parent="IK_character/Armature/Skeleton3D" parent_id_path=PackedInt32Array(1310603554, 15746632) index="2" unique_id=320359515]
 editor_description = "Copies the pelvis_target transform to mixamorig_Hips. Move and rotate the target to place the character's center of mass."
@@ -110,6 +211,7 @@ bone_name = "mixamorig_Neck"
 bone = 4
 
 [node name="r_leg" type="TwoBoneIK3D" parent="IK_character/Armature/Skeleton3D" parent_id_path=PackedInt32Array(1310603554, 15746632) index="5" unique_id=844685904]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.057267785)
 setting_count = 1
 settings/0/target_node = NodePath("../../../r_feet_marker")
 settings/0/pole_node = NodePath("../../../r_feet_pole")
@@ -186,39 +288,39 @@ settings/0/additive = false
 
 [node name="pelvis_target" type="Marker3D" parent="IK_character" unique_id=284568635]
 editor_description = "PELVIS CONTROL: translate and rotate this marker to place the hips before adjusting the torso and limbs."
-transform = Transform3D(1, 1e-06, 0, -1e-06, 0.999916, 0.012916, 0, -0.012916, 0.999916, 0, 1.0247833, 0.018182069)
+transform = Transform3D(0.9629308, -0.003483109, 0.2697259, -1.0000001e-06, 0.999916, 0.012916, -0.26974854, -0.012437484, 0.9628499, -0.19242021, 1.3608266, 0.12291083)
 gizmo_extents = 0.16
 
 [node name="center_back_target" type="Marker3D" parent="IK_character" unique_id=1828267813]
 editor_description = "CENTER-BACK CONTROL: move this marker to bend the Hips → Spine → Spine1 → Spine2 CCD chain."
-transform = Transform3D(1, 0, 0, 0, 0.80304605, -0.595917, 0, 0.595917, 0.80304605, 0, 1.335712, 0.43880063)
+transform = Transform3D(0.4610914, -0.5287885, -0.71258503, 0, 0.80304605, -0.595917, 0.88735265, 0.2747722, 0.3702776, 0, 1.2601172, 1.1561345)
 gizmo_extents = 0.13
 
 [node name="neck_target" type="Marker3D" parent="IK_character" unique_id=1834914834]
 editor_description = "NECK CONTROL: move this marker to aim the neck; use head_target afterward for independent head direction."
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.0026891232, 1.55, 0.712921)
+transform = Transform3D(0.95121306, 0, 0.30853486, 0, 1, 0, -0.30853486, 0, 0.95121306, -0.04162419, 1.8052145, 0.8531939)
 gizmo_extents = 0.11
 
 [node name="r_feet_marker" type="Marker3D" parent="IK_character" unique_id=593963181]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.08813381, 0.07727128, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.24413693, 0.057193696, -0.26087758)
 
 [node name="r_feet_pole" type="Marker3D" parent="IK_character" unique_id=1763327182]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21440677, 0.66233516, 0.5492424)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.21440677, 0.7740604, 0.9464774)
 
 [node name="l_feet_marker" type="Marker3D" parent="IK_character" unique_id=290070618]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.10186404, 0.07727128, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.10186404, 0.07727128, -0.17641544)
 
 [node name="l_feet_pole" type="Marker3D" parent="IK_character" unique_id=706715274]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.27792886, 0.6622108, 0.547402)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.33621266, 0.7852248, 0.60234064)
 
 [node name="r_arm_marker" type="Marker3D" parent="IK_character" unique_id=1299467747]
-transform = Transform3D(1.9106855e-15, -1, 4.371139e-08, -0.056675408, -4.364113e-08, -0.99839264, 0.99839264, -2.4773588e-09, -0.056675408, -0.751269, 1.458265, 0)
+transform = Transform3D(0.9687467, -0.23628947, 0.07547873, -0.23803134, -0.97114396, 0.014854312, 0.06979073, -0.0323565, -0.99703664, -0.22107714, 0.79150784, 0.5109257)
 
 [node name="r_arm_pole" type="Marker3D" parent="IK_character" unique_id=1183377927]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.4650765, 1.4, -0.522475)
 
 [node name="l_arm_marker" type="Marker3D" parent="IK_character" unique_id=1118314075]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.6047973, 1.5698025, 0.07068235)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.33953828, -0.5205431, 0.46249282)
 
 [node name="l_arm_pole" type="Marker3D" parent="IK_character" unique_id=1130753922]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.417107, 1.4, -0.41837847)

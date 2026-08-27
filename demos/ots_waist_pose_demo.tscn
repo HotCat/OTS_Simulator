@@ -1,0 +1,71 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="PackedScene" path="res://demos/character_demo.tscn" id="1_character_demo"]
+[ext_resource type="Script" path="res://scripts/orbit_camera_controller.gd" id="2_camera"]
+
+[sub_resource type="StandardMaterial3D" id="ShoulderMaterial"]
+albedo_color = Color(0.72, 0.08, 0.055, 1)
+roughness = 0.72
+
+[node name="OTSWaistPoseDemo" instance=ExtResource("1_character_demo")]
+
+[node name="IK_character" parent="." index="3"]
+position = Vector3(0, 0.44, 0)
+manual_pose_enabled = true
+waist_bend_degrees = 106.0
+waist_side_bend_degrees = 2.0
+waist_twist_degrees = -3.0
+body_ik_enabled = false
+limb_ik_enabled = true
+
+[node name="r_feet_marker" parent="IK_character" index="4"]
+position = Vector3(-0.09, 0.16, -0.42)
+
+[node name="r_feet_pole" parent="IK_character" index="5"]
+position = Vector3(-0.22, 0.68, -0.72)
+
+[node name="l_feet_marker" parent="IK_character" index="6"]
+position = Vector3(0.1, 0.1, -0.5)
+
+[node name="l_feet_pole" parent="IK_character" index="7"]
+position = Vector3(0.28, 0.72, -0.78)
+
+[node name="r_arm_marker" parent="IK_character" index="8"]
+position = Vector3(-0.25, 0.52, 0.2)
+
+[node name="r_arm_pole" parent="IK_character" index="9"]
+position = Vector3(-0.46, 0.92, 0.42)
+
+[node name="l_arm_marker" parent="IK_character" index="10"]
+position = Vector3(0.24, 0.42, 0.58)
+
+[node name="l_arm_pole" parent="IK_character" index="11"]
+position = Vector3(0.43, 0.88, 0.84)
+
+[node name="Camera3D" parent="." index="2"]
+position = Vector3(3.1, 1.55, 0.15)
+rotation_degrees = Vector3(-4, 90, 0)
+fov = 42.0
+script = ExtResource("2_camera")
+
+[node name="ShoulderSupport" type="CSGCylinder3D" parent="." index="4"]
+position = Vector3(0, 1.43, 0.02)
+rotation_degrees = Vector3(90, 0, 0)
+material = SubResource("ShoulderMaterial")
+radius = 0.12
+height = 0.62
+sides = 32
+
+[node name="PoseInstructions" type="Label" parent="." index="5"]
+offset_left = 24.0
+offset_top = 20.0
+offset_right = 780.0
+offset_bottom = 112.0
+theme_override_colors/font_color = Color(0.96, 0.97, 1, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.8)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 20
+text = "OTS SIDE-VIEW PRESET — 106° waist fold + relaxed limb IK\nMouse: look  •  Wheel or +/−: zoom  •  PgUp/PgDn: height  •  Esc: release  •  R: reset view"
+
+[editable path="IK_character"]
