@@ -6,6 +6,8 @@ const BONE_NAMES: Array[StringName] = [
 	&"Spine",
 	&"Chest",
 	&"UpperChest",
+	&"LeftShoulder",
+	&"RightShoulder",
 	&"Neck",
 	&"Head",
 ]
@@ -79,7 +81,7 @@ func _build_panel() -> void:
 	margin.add_child(content)
 
 	var title := Label.new()
-	title.text = "Quick FK — Torso & Head"
+	title.text = "Quick FK — Torso, Shoulders & Head"
 	title.add_theme_font_size_override("font_size", 16)
 	content.add_child(title)
 

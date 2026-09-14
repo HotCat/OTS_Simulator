@@ -160,9 +160,10 @@ bones** first. Direct FK edits and active IK should not be used at the same time
 
 ## Quick FK torso controls
 
-The 3D viewport now has a **Quick FK — Torso & Head** panel. It provides direct
-buttons for `Hips`, `Spine`, `Chest`, `UpperChest`, `Neck`, and `Head`, followed
-by local X/Y/Z rotation fields. These controls avoid navigating the full
+The 3D viewport now has a **Quick FK — Torso, Shoulders & Head** panel. It
+provides direct buttons for `Hips`, `Spine`, `Chest`, `UpperChest`,
+`LeftShoulder`, `RightShoulder`, `Neck`, and `Head`, followed by local X/Y/Z
+rotation fields. These controls avoid navigating the full
 Skeleton3D bone tree.
 
 The panel deliberately disables its rotation fields while IK is active. Bake
