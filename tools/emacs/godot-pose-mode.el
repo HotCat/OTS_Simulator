@@ -310,7 +310,8 @@ states to `poses', makes POSE-NAME active, and leaves the buffer modified for
               (insert "\n" entry "\n  "))
           (goto-char close-position)
           (skip-chars-backward " \t\r\n")
-          (forward-char 1)
+          ;; Insert before the closing brace; inserting after it creates a
+          ;; valid root-level property that validation cannot select.
           (insert ",\n" entry))))))
 
 (defun godot-pose-delete-profile (pose-name &optional skip-confirmation)
