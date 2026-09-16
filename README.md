@@ -74,16 +74,20 @@ preview to run at the same time. Both listeners bind only to localhost.
   torso controls, IK/FK behavior, baking, and the Quick FK panel.
 - [Pose stream workflow](POSE_STREAM_WORKFLOW.md) documents the `.gdpose` format,
   editor/runtime protocol, capture workflow, Emacs commands, and troubleshooting.
+- [Image to `.gdpose`](IMAGE_TO_GDPOSE.md) converts a still-image pose estimate
+  into coarse IK controls for manual refinement in Godot.
 
 ## Project structure
 
 - `addons/quick_fk_bones/` — editor dock for quickly selecting and rotating the
-  hips, spine, chest, upper chest, neck, and head bones.
+  torso, shoulders, upper/lower arms, hands, neck, and head bones.
 - `scripts/pose_stream_server.gd` — localhost NDJSON receiver used by the editor
   and runtime pose workflow.
 - `scripts/ots_pose_controller.gd` — IK/FK controls, torso posing, marker reset,
   and editor capture/apply support.
 - `tools/emacs/godot-pose-mode.el` — Emacs major mode for versioned pose profiles.
+- `tools/image_to_gdpose.py` — MediaPipe and SAM 3D/MHR JSON pose converter.
+- `tools/sam3d_export_json.py` — optional wrapper for exporting official SAM 3D Body results.
 - `poses/` — reusable, Git-friendly pose documents.
 - `demos/` — original examples plus the OTS and manual-pose scenes.
 

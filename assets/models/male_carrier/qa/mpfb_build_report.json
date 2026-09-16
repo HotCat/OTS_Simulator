@@ -1,0 +1,283 @@
+{
+  "actor_id": "male_1785818633452",
+  "config": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1785818633452/fit-config.json",
+  "target_height_m": 1.8,
+  "native_visible_height_m": 1.800019245769363,
+  "probe_import_height_m": 1.8364241607487202,
+  "glb_root_export_scale": 0.9801657146931296,
+  "final_import_height_m": 1.800000524148345,
+  "height_error_m": 5.241483449491824e-07,
+  "rig": "game_engine",
+  "rig_bones": 53,
+  "vertices": 19158,
+  "faces": 18486,
+  "initial_height_fit": {
+    "macro": 0.69219970703125,
+    "height_m": 1.799971142085269
+  },
+  "final_height_fit": {
+    "macro": 0.69256591796875,
+    "height_m": 1.800019245769363
+  },
+  "initial_height_trials": [
+    {
+      "macro": 0.5,
+      "height_m": 1.5593884044792503
+    },
+    {
+      "macro": 0.75,
+      "height_m": 1.8762919873697683
+    },
+    {
+      "macro": 0.625,
+      "height_m": 1.704361964657437
+    },
+    {
+      "macro": 0.6875,
+      "height_m": 1.793764931964688
+    },
+    {
+      "macro": 0.71875,
+      "height_m": 1.8350284000625834
+    },
+    {
+      "macro": 0.703125,
+      "height_m": 1.8143638109322637
+    },
+    {
+      "macro": 0.6953125,
+      "height_m": 1.804064252297394
+    },
+    {
+      "macro": 0.69140625,
+      "height_m": 1.79891477082856
+    },
+    {
+      "macro": 0.693359375,
+      "height_m": 1.801489511562977
+    },
+    {
+      "macro": 0.6923828125,
+      "height_m": 1.8002351751783863
+    },
+    {
+      "macro": 0.69189453125,
+      "height_m": 1.7995749730616808
+    },
+    {
+      "macro": 0.692138671875,
+      "height_m": 1.7999050740618259
+    },
+    {
+      "macro": 0.6922607421875,
+      "height_m": 1.8000370906665921
+    },
+    {
+      "macro": 0.69219970703125,
+      "height_m": 1.799971142085269
+    },
+    {
+      "macro": 0.692230224609375,
+      "height_m": 1.8000370906665921
+    },
+    {
+      "macro": 0.6922149658203125,
+      "height_m": 1.799971142085269
+    }
+  ],
+  "final_height_trials": [
+    {
+      "macro": 0.5,
+      "height_m": 1.5589743906166404
+    },
+    {
+      "macro": 0.75,
+      "height_m": 1.8758779735071585
+    },
+    {
+      "macro": 0.625,
+      "height_m": 1.7039479507948272
+    },
+    {
+      "macro": 0.6875,
+      "height_m": 1.7933509181020781
+    },
+    {
+      "macro": 0.71875,
+      "height_m": 1.834614505409263
+    },
+    {
+      "macro": 0.703125,
+      "height_m": 1.8139497970696539
+    },
+    {
+      "macro": 0.6953125,
+      "height_m": 1.8036502384347841
+    },
+    {
+      "macro": 0.69140625,
+      "height_m": 1.7985007569659501
+    },
+    {
+      "macro": 0.693359375,
+      "height_m": 1.8010754977003671
+    },
+    {
+      "macro": 0.6923828125,
+      "height_m": 1.7998211613157764
+    },
+    {
+      "macro": 0.69287109375,
+      "height_m": 1.8004154147347435
+    },
+    {
+      "macro": 0.692626953125,
+      "height_m": 1.8001512623741291
+    },
+    {
+      "macro": 0.6925048828125,
+      "height_m": 1.7999531779205427
+    },
+    {
+      "macro": 0.69256591796875,
+      "height_m": 1.800019245769363
+    },
+    {
+      "macro": 0.692535400390625,
+      "height_m": 1.800019245769363
+    },
+    {
+      "macro": 0.6925201416015625,
+      "height_m": 1.7999531779205427
+    }
+  ],
+  "detail_targets": [
+    {
+      "target": "torso/measure-shoulder-dist-incr",
+      "weight": 0.15
+    },
+    {
+      "target": "torso/torso-vshape-incr",
+      "weight": 0.1
+    },
+    {
+      "target": "torso/measure-frontchest-dist-incr",
+      "weight": 0.06
+    },
+    {
+      "target": "torso/measure-waist-circ-decr",
+      "weight": 0.05
+    },
+    {
+      "target": "torso/measure-hips-circ-decr",
+      "weight": 0.05
+    },
+    {
+      "target": "neck/measure-neck-circ-incr",
+      "weight": 0.05
+    },
+    {
+      "target": "arms/measure-upperarm-circ-incr",
+      "weight": 0.08
+    },
+    {
+      "target": "legs/measure-thigh-circ-incr",
+      "weight": 0.06
+    },
+    {
+      "target": "legs/measure-calf-circ-incr",
+      "weight": 0.04
+    },
+    {
+      "target": "head/head-rectangular",
+      "weight": 0.1
+    },
+    {
+      "target": "head/head-scale-horiz-incr",
+      "weight": 0.025
+    },
+    {
+      "target": "head/head-back-scale-depth-incr",
+      "weight": 0.04
+    },
+    {
+      "target": "chin/chin-width-incr",
+      "weight": 0.07
+    },
+    {
+      "target": "chin/chin-height-incr",
+      "weight": 0.025
+    },
+    {
+      "target": "nose/nose-scale-depth-incr",
+      "weight": 0.045
+    },
+    {
+      "target": "nose/nose-width1-incr",
+      "weight": 0.025
+    },
+    {
+      "target": "eyes/l-eye-epicanthus-in",
+      "weight": 0.08
+    },
+    {
+      "target": "eyes/r-eye-epicanthus-in",
+      "weight": 0.08
+    }
+  ],
+  "first_import": {
+    "bounds_min": [
+      -0.5867526531219482,
+      -0.380849152803421,
+      -0.026362229138612747
+    ],
+    "bounds_max": [
+      0.5867526531219482,
+      0.10924921929836273,
+      1.8100619316101074
+    ],
+    "meshes": [
+      "male_1785818633452_Basemesh",
+      "Icosphere"
+    ],
+    "armatures": [
+      "male_1785818633452_game_engine"
+    ],
+    "bone_counts": {
+      "male_1785818633452_game_engine": 53
+    }
+  },
+  "final_import": {
+    "bounds_min": [
+      -0.5751146078109741,
+      -0.373295396566391,
+      -0.0258393045514822
+    ],
+    "bounds_max": [
+      0.5751147866249084,
+      0.10708234459161758,
+      1.7741612195968628
+    ],
+    "meshes": [
+      "male_1785818633452_Basemesh",
+      "Icosphere"
+    ],
+    "armatures": [
+      "male_1785818633452_game_engine"
+    ],
+    "bone_counts": {
+      "male_1785818633452_game_engine": 53
+    }
+  },
+  "raw_glb": {
+    "magic": "glTF",
+    "version": 2,
+    "declared_length": 15742892,
+    "node_count": 55,
+    "mesh_count": 1,
+    "contains_icosphere": false
+  },
+  "preset": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1785818633452/actor/human.male_1785818633452.json",
+  "blend": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1785818633452/actor/male_1785818633452_realtime_proxy.blend",
+  "glb": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1785818633452/actor/male_1785818633452_realtime_proxy.glb"
+}

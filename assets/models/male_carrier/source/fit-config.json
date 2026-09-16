@@ -1,0 +1,96 @@
+{
+  "macro": {
+    "gender": 1.0,
+    "age": 0.43,
+    "muscle": 0.66,
+    "weight": 0.46,
+    "proportions": 0.57,
+    "cupsize": 0.0,
+    "firmness": 0.55,
+    "race": {
+      "asian": 1.0,
+      "caucasian": 0.0,
+      "african": 0.0
+    }
+  },
+  "detail_targets": [
+    {
+      "target": "torso/measure-shoulder-dist-incr",
+      "weight": 0.15
+    },
+    {
+      "target": "torso/torso-vshape-incr",
+      "weight": 0.10
+    },
+    {
+      "target": "torso/measure-frontchest-dist-incr",
+      "weight": 0.06
+    },
+    {
+      "target": "torso/measure-waist-circ-decr",
+      "weight": 0.05
+    },
+    {
+      "target": "torso/measure-hips-circ-decr",
+      "weight": 0.05
+    },
+    {
+      "target": "neck/measure-neck-circ-incr",
+      "weight": 0.05
+    },
+    {
+      "target": "arms/measure-upperarm-circ-incr",
+      "weight": 0.08
+    },
+    {
+      "target": "legs/measure-thigh-circ-incr",
+      "weight": 0.06
+    },
+    {
+      "target": "legs/measure-calf-circ-incr",
+      "weight": 0.04
+    },
+    {
+      "target": "head/head-rectangular",
+      "weight": 0.10
+    },
+    {
+      "target": "head/head-scale-horiz-incr",
+      "weight": 0.025
+    },
+    {
+      "target": "head/head-back-scale-depth-incr",
+      "weight": 0.04
+    },
+    {
+      "target": "chin/chin-width-incr",
+      "weight": 0.07
+    },
+    {
+      "target": "chin/chin-height-incr",
+      "weight": 0.025
+    },
+    {
+      "target": "nose/nose-scale-depth-incr",
+      "weight": 0.045
+    },
+    {
+      "target": "nose/nose-width1-incr",
+      "weight": 0.025
+    },
+    {
+      "target": "eyes/l-eye-epicanthus-in",
+      "weight": 0.08
+    },
+    {
+      "target": "eyes/r-eye-epicanthus-in",
+      "weight": 0.08
+    }
+  ],
+  "neutral_skin_rgba": [
+    0.56,
+    0.34,
+    0.23,
+    1.0
+  ]
+}

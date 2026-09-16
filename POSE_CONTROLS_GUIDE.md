@@ -56,13 +56,23 @@ There are three common causes:
    the chain's bone lengths. Put the target near the body first, then move it
    gradually.
 3. **The manual waist pass is competing with IK.** The controller's
-   `waist_bend_degrees` writes rotations directly to the waist bones. For
+   waist degree sliders write rotations directly to bones. For
    target-driven torso experiments, set `waist_bend_degrees = 0` and leave
    `body_ik_enabled = true`. For slider-driven manual waist posing, set
    `body_ik_enabled = false`.
 
 The editor gizmo itself does not know about IK. It only moves a Node3D; the
 modifier must be active and point at that node.
+
+### Keyboard focus while exploring
+
+Gameplay and orbit-camera shortcuts are focus-aware. The pose panel uses
+mouse-click focus, and the project-wide keyboard guard releases any focused
+Roll/Pitch/Yaw editor when an arrow, `R`, or `F` key is pressed. This prevents
+Godot's default focus rectangle from hopping between controls and keeps those
+keys available for TCP/viewport exploration. Click a field to type a numeric
+value; click the 3D viewport (or press **Escape**) to leave the field and
+resume viewport exploration.
 
 ## A reliable learning workflow
 
@@ -158,13 +168,16 @@ feature from moving the existing markers.
 If the commit button reports that IK is active, use **Bake current IK pose to
 bones** first. Direct FK edits and active IK should not be used at the same time.
 
-## Quick FK torso controls
+## Quick FK bone controls
 
-The 3D viewport now has a **Quick FK — Torso, Shoulders & Head** panel. It
+The 3D viewport now has a **Quick FK — Body & Ponytail** panel. It
 provides direct buttons for `Hips`, `Spine`, `Chest`, `UpperChest`,
-`LeftShoulder`, `RightShoulder`, `Neck`, and `Head`, followed by local X/Y/Z
-rotation fields. These controls avoid navigating the full
-Skeleton3D bone tree.
+`LeftShoulder`, `LeftUpperArm`, `LeftLowerArm`, `LeftHand`, `RightShoulder`,
+`RightUpperArm`, `RightLowerArm`, `RightHand`, `Neck`, `Head`,
+`Ponytail_Bone1`, and `Ponytail_Bone2`, followed by local X/Y/Z rotation
+fields. The bone-button list has its own vertical scrollbar, so the X/Y/Z
+fields and action buttons remain visible while you browse the full list. These
+controls avoid navigating the full Skeleton3D bone tree.
 
 The panel deliberately disables its rotation fields while IK is active. Bake
 the coarse marker pose first, choose a bone in the panel, and then type or drag

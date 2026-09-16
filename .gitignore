@@ -5,7 +5,12 @@
 *~
 \#*\#
 *.elc
+__pycache__/
+*.py[cod]
+.venv-image-pose/
 renders/
+# Local SAM 3D Body source and multi-gigabyte Hugging Face checkpoints.
+sam3d/
 
 # Godot-specific ignores
 .import/

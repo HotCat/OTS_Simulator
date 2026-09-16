@@ -1,0 +1,80 @@
+{
+  "passed": true,
+  "failures": [],
+  "glb": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1785818633452/actor/male_1785818633452_humanizer_proxy.glb",
+  "file_size_bytes": 1884108,
+  "raw": {
+    "node_count": 58,
+    "mesh_count": 1,
+    "skin_count": 1,
+    "material_count": 8,
+    "image_count": 0,
+    "images": [],
+    "texture_count": 0,
+    "material_texture_indices": [],
+    "referenced_image_indices": [],
+    "contains_icosphere": false,
+    "mesh_nodes": [
+      {
+        "name": "Avatar",
+        "mesh": 0,
+        "skin": 0
+      }
+    ],
+    "unskinned_mesh_nodes": [],
+    "surface_count": 8,
+    "animation_names": [
+      "animations_Idle",
+      "animations_Run"
+    ]
+  },
+  "fresh_import": {
+    "mesh_objects": [
+      "Avatar",
+      "Icosphere"
+    ],
+    "payload_meshes": [
+      "Avatar"
+    ],
+    "importer_helpers": [
+      "Icosphere"
+    ],
+    "armatures": [
+      "male_1785818633452_humanizer_proxy_Humanizer_RealtimeProxy"
+    ],
+    "bone_counts": {
+      "male_1785818633452_humanizer_proxy_Humanizer_RealtimeProxy": 53
+    },
+    "weighted_meshes": [
+      "Avatar"
+    ],
+    "animation_names": [
+      "animations_Idle",
+      "animations_Run"
+    ],
+    "bounds_min": [
+      -0.3187098503112793,
+      -0.3081541359424591,
+      0.018850166350603104
+    ],
+    "bounds_max": [
+      0.33503642678260803,
+      0.08673086762428284,
+      1.8188802003860474
+    ],
+    "height_m": 1.8000300340354443,
+    "height_surface_index": 0,
+    "height_surface_vertex_count": 14517,
+    "visual_bounds_min": [
+      -0.3187098503112793,
+      -0.3081541359424591,
+      0.018850166350603104
+    ],
+    "visual_bounds_max": [
+      0.33503642678260803,
+      0.08673086762428284,
+      1.8368983268737793
+    ],
+    "visual_height_m": 1.8180481605231762
+  }
+}

@@ -1,0 +1,108 @@
+{
+    "clothes": [],
+    "color_adjustments": {},
+    "expressions": [],
+    "eyebrows": "",
+    "eyelashes": "",
+    "eyes": "",
+    "eyes_material_settings": {},
+    "eyes_material_type": "MAKESKIN",
+    "hair": "",
+    "makeup": [],
+    "phenotype": {
+        "age": 0.4300000071525574,
+        "cupsize": 0.0,
+        "firmness": 0.550000011920929,
+        "gender": 1.0,
+        "height": 0.69256591796875,
+        "muscle": 0.6600000262260437,
+        "proportions": 0.5699999928474426,
+        "race": {
+            "african": 0.0,
+            "asian": 1.0,
+            "caucasian": 0.0
+        },
+        "weight": 0.46000000834465027
+    },
+    "proxy": "",
+    "rig": "game_engine",
+    "skin_material_settings": {},
+    "skin_material_type": "GAMEENGINE",
+    "skin_mhmat": "",
+    "targets": [
+        {
+            "target": "measure-shoulder-dist-incr",
+            "value": 0.15000000596046448
+        },
+        {
+            "target": "torso-vshape-incr",
+            "value": 0.10000000149011612
+        },
+        {
+            "target": "measure-frontchest-dist-incr",
+            "value": 0.05999999865889549
+        },
+        {
+            "target": "measure-waist-circ-decr",
+            "value": 0.05000000074505806
+        },
+        {
+            "target": "measure-hips-circ-decr",
+            "value": 0.05000000074505806
+        },
+        {
+            "target": "measure-neck-circ-incr",
+            "value": 0.05000000074505806
+        },
+        {
+            "target": "measure-upperarm-circ-incr",
+            "value": 0.07999999821186066
+        },
+        {
+            "target": "measure-thigh-circ-incr",
+            "value": 0.05999999865889549
+        },
+        {
+            "target": "measure-calf-circ-incr",
+            "value": 0.03999999910593033
+        },
+        {
+            "target": "head-rectangular",
+            "value": 0.10000000149011612
+        },
+        {
+            "target": "head-scale-horiz-incr",
+            "value": 0.02500000037252903
+        },
+        {
+            "target": "head-back-scale-depth-incr",
+            "value": 0.03999999910593033
+        },
+        {
+            "target": "chin-width-incr",
+            "value": 0.07000000029802322
+        },
+        {
+            "target": "chin-height-incr",
+            "value": 0.02500000037252903
+        },
+        {
+            "target": "nose-scale-depth-incr",
+            "value": 0.04500000178813934
+        },
+        {
+            "target": "nose-width1-incr",
+            "value": 0.02500000037252903
+        },
+        {
+            "target": "l-eye-epicanthus-in",
+            "value": 0.07999999821186066
+        },
+        {
+            "target": "r-eye-epicanthus-in",
+            "value": 0.07999999821186066
+        }
+    ],
+    "teeth": "",
+    "tongue": ""
+}

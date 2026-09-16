@@ -12,10 +12,15 @@ func _ready():
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 func _input(event):
+	if _is_gui_input_focused():
+		return
 	if event is InputEventMouseMotion:
 		rotate_y(deg_to_rad(-event.relative.x * mouse_sens))
 		head.rotate_x(deg_to_rad(-event.relative.y * mouse_sens))
 		head.rotation.x = clamp(head.rotation.x,deg_to_rad(-89),deg_to_rad(89))
+
+func _is_gui_input_focused() -> bool:
+	return get_viewport().gui_get_focus_owner() != null
 				
 func _physics_process(delta: float) -> void:
 	# Add the gravity.
@@ -35,7 +40,9 @@ func _physics_process(delta: float) -> void:
 	if !animation_player.is_playing():
 		animation_player.play("idle")
 	
-	var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
+	var input_dir := Vector2.ZERO
+	if not _is_gui_input_focused():
+		input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
 	var direction := (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
 	if direction:
 		velocity.x = direction.x * SPEED

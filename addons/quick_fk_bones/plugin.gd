@@ -7,9 +7,17 @@ const BONE_NAMES: Array[StringName] = [
 	&"Chest",
 	&"UpperChest",
 	&"LeftShoulder",
+	&"LeftUpperArm",
+	&"LeftLowerArm",
+	&"LeftHand",
 	&"RightShoulder",
+	&"RightUpperArm",
+	&"RightLowerArm",
+	&"RightHand",
 	&"Neck",
 	&"Head",
+	&"Ponytail_Bone1",
+	&"Ponytail_Bone2",
 ]
 const EULER_ORDER := EULER_ORDER_YXZ
 const PoseStreamServer = preload("res://scripts/pose_stream_server.gd")
@@ -25,6 +33,11 @@ var _editor_pose_server: Node
 func _enter_tree() -> void:
 	_build_panel()
 	add_control_to_container(EditorPlugin.CONTAINER_SPATIAL_EDITOR_SIDE_LEFT, _panel)
+	# EditorPlugin input is separate from the running game's input tree. Keep a
+	# small editor-side hook so a click in the 3D workspace really gives the
+	# keyboard back to viewport/TCP navigation after a SpinBox LineEdit was
+	# edited.
+	set_process_input(true)
 	scene_changed.connect(_on_scene_changed)
 	_start_editor_pose_server()
 	_select_bone(_selected_bone)
@@ -38,6 +51,49 @@ func _exit_tree() -> void:
 	if is_instance_valid(_editor_pose_server):
 		_editor_pose_server.queue_free()
 		_editor_pose_server = null
+
+func _input(event: InputEvent) -> void:
+	# This catches clicks in editor docks that are not forwarded through the
+	# 3D viewport. Do not steal focus when the click is on our own pose panel;
+	# that click must still focus the selected field/button.
+	if not _is_background_left_click(event):
+		return
+	call_deferred("_release_editor_focus")
+
+func _forward_3d_gui_input(_viewport_camera: Camera3D, event: InputEvent) -> int:
+	# The 3D editor viewport is where users click to resume arrow/R/F TCP
+	# exploration. _unhandled_input is too late for editor controls, while this
+	# forwarding hook runs for the viewport click itself.
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			call_deferred("_release_editor_focus")
+	return EditorPlugin.AFTER_GUI_INPUT_PASS
+
+func _is_background_left_click(event: InputEvent) -> bool:
+	if not event is InputEventMouseButton:
+		return false
+	var mouse_event := event as InputEventMouseButton
+	if not mouse_event.pressed or mouse_event.button_index != MOUSE_BUTTON_LEFT:
+		return false
+	if is_instance_valid(_panel) and _panel.get_global_rect().has_point(mouse_event.position):
+		return false
+	return true
+
+func _release_editor_focus() -> void:
+	var base_control := EditorInterface.get_base_control()
+	if base_control == null:
+		return
+	var editor_viewport := base_control.get_viewport()
+	if editor_viewport == null:
+		return
+	var focus_owner := editor_viewport.gui_get_focus_owner()
+	if focus_owner != null:
+		focus_owner.release_focus()
+	# gui_release_focus() exists in current Godot 4 builds, but keep this
+	# guarded so the plugin remains loadable on older 4.x editor versions.
+	if editor_viewport.has_method("gui_release_focus"):
+		editor_viewport.call("gui_release_focus")
 
 func _start_editor_pose_server() -> void:
 	_editor_pose_server = PoseStreamServer.new()
@@ -66,6 +122,11 @@ func _on_scene_changed(_scene_root: Node) -> void:
 func _build_panel() -> void:
 	_panel = PanelContainer.new()
 	_panel.name = "QuickFKBones"
+	# The pose panel is edited with the mouse while the keyboard is reserved for
+	# viewport/TCP exploration. FOCUS_CLICK still lets a user click a field and
+	# type a value, but prevents Godot's default arrow-key focus traversal from
+	# moving the selection rectangle between Roll/Pitch/Yaw controls.
+	_panel.focus_mode = Control.FOCUS_NONE
 	_panel.custom_minimum_size = Vector2(238.0, 0.0)
 	_panel.tooltip_text = "Fine-tune local FK rotations without expanding the Skeleton3D bone hierarchy."
 
@@ -81,7 +142,7 @@ func _build_panel() -> void:
 	margin.add_child(content)
 
 	var title := Label.new()
-	title.text = "Quick FK — Torso, Shoulders & Head"
+	title.text = "Quick FK — Body & Ponytail"
 	title.add_theme_font_size_override("font_size", 16)
 	content.add_child(title)
 
@@ -91,16 +152,35 @@ func _build_panel() -> void:
 	hint.modulate = Color(0.78, 0.82, 0.88)
 	content.add_child(hint)
 
+	# Keep the rotation editor visible even as the frequently used bone list
+	# grows. Only the buttons scroll; X/Y/Z and the action buttons stay fixed
+	# below this viewport.
+	var bone_scroll := ScrollContainer.new()
+	bone_scroll.name = "BoneScroll"
+	bone_scroll.custom_minimum_size.y = 260.0
+	bone_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	bone_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	bone_scroll.tooltip_text = "Scroll to choose a Quick FK bone."
+	content.add_child(bone_scroll)
+
+	var bone_list := VBoxContainer.new()
+	bone_list.name = "BoneList"
+	bone_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bone_list.add_theme_constant_override("separation", 4)
+	bone_scroll.add_child(bone_list)
+
 	var button_group := ButtonGroup.new()
 	for bone_name in BONE_NAMES:
 		var button := Button.new()
 		button.text = bone_name
 		button.toggle_mode = true
 		button.button_group = button_group
+		button.focus_mode = Control.FOCUS_CLICK
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.tooltip_text = "Edit the %s bone" % bone_name
 		button.pressed.connect(_select_bone.bind(bone_name))
-		content.add_child(button)
+		bone_list.add_child(button)
 		_bone_buttons[bone_name] = button
 
 	content.add_child(HSeparator.new())
@@ -129,20 +209,28 @@ func _build_panel() -> void:
 		field.suffix = "°"
 		field.allow_greater = true
 		field.allow_lesser = true
+		field.focus_mode = Control.FOCUS_CLICK
 		field.custom_minimum_size.x = 170.0
 		field.tooltip_text = "Local %s rotation in degrees. Type a value or drag horizontally." % axis_label.text
+		# SpinBox owns a LineEdit child. Apply the same focus policy to that
+		# child, otherwise it can still hand arrow presses to sibling Controls.
+		var line_edit := field.get_line_edit()
+		if line_edit != null:
+			line_edit.focus_mode = Control.FOCUS_CLICK
 		field.value_changed.connect(_rotation_value_changed.bind(axis_number))
 		grid.add_child(field)
 		_rotation_fields.append(field)
 
 	var reset_button := Button.new()
 	reset_button.text = "Reset selected rotation"
+	reset_button.focus_mode = Control.FOCUS_CLICK
 	reset_button.tooltip_text = "Set this bone's local pose rotation to 0°, 0°, 0°."
 	reset_button.pressed.connect(_reset_selected_rotation)
 	content.add_child(reset_button)
 
 	var refresh_button := Button.new()
 	refresh_button.text = "Refresh from skeleton"
+	refresh_button.focus_mode = Control.FOCUS_CLICK
 	refresh_button.tooltip_text = "Reload the displayed Euler angles from the current bone pose."
 	refresh_button.pressed.connect(_refresh_rotation_fields)
 	content.add_child(refresh_button)

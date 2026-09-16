@@ -26,6 +26,15 @@ func _ready() -> void:
 	_update_camera()
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Keep the TCP/pose overlay's Roll/Pitch/Yaw editors isolated from the
+	# viewport shortcuts. In particular, R must not reset the camera while a
+	# SpinBox LineEdit has focus, and arrow keys must remain with the editor.
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var focus_owner := get_viewport().gui_get_focus_owner()
+		if focus_owner != null:
+			focus_owner.release_focus()
+	if _is_gui_input_focused():
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_ESCAPE:
@@ -59,6 +68,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				55.0
 			)
 			_update_camera()
+
+func _is_gui_input_focused() -> bool:
+	return get_viewport().gui_get_focus_owner() != null
 
 func _change_distance(amount: float) -> void:
 	distance = clampf(distance + amount, 1.2, 10.0)

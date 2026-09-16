@@ -1,0 +1,21 @@
+diff --git a/sam_3d_body/sam_3d_body_estimator.py b/sam_3d_body/sam_3d_body_estimator.py
+--- a/sam_3d_body/sam_3d_body_estimator.py
++++ b/sam_3d_body/sam_3d_body_estimator.py
+@@ -159,3 +159,5 @@ class SAM3DBodyEstimator:
+         #################### Run model inference on an image ####################
+-        batch = recursive_to(batch, "cuda")
++        # Respect the device selected by load_sam_3d_body. Upstream's CUDA
++        # literal prevents the supported CPU/MPS loaders from being useful.
++        batch = recursive_to(batch, self.device)
+         self.model._initialize_batch(batch)
+diff --git a/sam_3d_body/models/meta_arch/sam3d_body.py b/sam_3d_body/models/meta_arch/sam3d_body.py
+--- a/sam_3d_body/models/meta_arch/sam3d_body.py
++++ b/sam_3d_body/models/meta_arch/sam3d_body.py
+@@ -1031,6 +1031,6 @@ class SAM3DBody(BaseModel):
+             )[None, None, :, :, :]
+             .repeat(B, N, 1, 1, 1)
+-            .cuda()
++            .to(batch["img"].device)
+         )  # B x N x H x W x 2
+         meshgrid_xy = (
+             meshgrid_xy / batch["affine_trans"][:, :, None, None, [0, 1], [0, 1]]
