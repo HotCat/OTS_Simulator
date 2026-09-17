@@ -4,12 +4,14 @@ The pose document is the source of truth. Godot does not need to bake an IK
 result into an inherited scene before you can compare poses, and switching a
 runtime preview does not modify the `.tscn` file.
 
-The initial document is:
+The actor documents are:
 
-`res://poses/ots-carry.gdpose`
+- `res://poses/female-poses.gdpose` — the 56-bone female plus IK controls;
+- `res://poses/male-carrier-poses.gdpose` — the 53-bone male carrier;
+- `res://poses/shots/ots-shot-01.gdshot` — a shot selecting one pose per actor.
 
-It includes the complete 56-bone hierarchy, IK control names, modifier names,
-and four editable named poses.
+Each `.gdpose` owns one character path, rig, active pose, and named pose
+library. The `.gdshot` stores references only, keeping character poses reusable.
 
 ## Load the Emacs mode
 
@@ -22,8 +24,8 @@ Add this to your Emacs configuration:
 (require 'godot-pose-mode)
 ```
 
-Then open `poses/ots-carry.gdpose`. The `.gdpose` extension automatically
-activates `godot-pose-mode`.
+Open either actor `.gdpose` file to activate `godot-pose-mode`, or open the
+`.gdshot` file to activate `godot-shot-mode`.
 
 To test without changing your Emacs configuration:
 
@@ -33,7 +35,7 @@ cd '/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6'
 emacs -Q \
   -L tools/emacs \
   -l godot-pose-mode.el \
-  poses/ots-carry.gdpose
+  poses/shots/ots-shot-01.gdshot
 ```
 
 ## Main keys
@@ -58,6 +60,37 @@ editor viewport changes without running the game and Godot replies with
 
 `C-c C-r` and `C-c C-t` are the separate game-preview path. They are not
 required for editor evaluation.
+
+## Multi-actor shot documents
+
+A shot selects named poses from separate actor documents:
+
+```json
+{
+  "schema": "godot-shot-document",
+  "version": 1,
+  "actors": {
+    "female": {
+      "document": "../female-poses.gdpose",
+      "pose": "ots_female_20260917_093318"
+    },
+    "male_carrier": {
+      "document": "../male-carrier-poses.gdpose",
+      "pose": "rest_standing"
+    }
+  }
+}
+```
+
+From a `.gdshot` buffer:
+
+- `C-c C-e` validates both documents and applies both poses to the editor;
+- `C-c C-t` applies both poses to the runtime;
+- `C-c C-v` verifies every document path and selected pose;
+- `C-c C-r` starts the shared preview scene.
+
+Edit or capture poses from the individual `.gdpose` buffers. The shot is for
+blocking and synchronized preview, not a second copy of bone transforms.
 
 The normal `C-x C-s` still behaves normally. `C-c C-s` adds one useful rule:
 if the buffer is outside the project, it offers the project's `poses/`

@@ -48,7 +48,9 @@ Load the major mode once in Emacs:
 (require 'godot-pose-mode)
 ```
 
-Then open `poses/ots-carry.gdpose`. Important commands are:
+Open `poses/female-poses.gdpose` or `poses/male-carrier-poses.gdpose` to edit
+one actor. Open `poses/shots/ots-shot-01.gdshot` to preview both actors as one
+shot. Important pose-document commands are:
 
 | Key | Action |
 | --- | --- |
@@ -61,6 +63,11 @@ Then open `poses/ots-carry.gdpose`. Important commands are:
 | `C-c C-s` | Save the pose document inside the project for Git tracking. |
 | `C-c C-v` | Validate the pose document. |
 | `C-c C-k` | Close the pose stream connection. |
+
+In a `.gdshot` buffer, `C-c C-e` sends every referenced actor pose to the
+editor, while `C-c C-t` sends the whole shot to the running preview. Actor
+poses remain in their own files, so the 56-bone female and 53-bone male rigs
+can evolve independently.
 
 The editor receiver listens on `127.0.0.1:7007`; the optional runtime receiver
 uses `127.0.0.1:7008`. Keeping the ports separate allows the editor and game
@@ -85,10 +92,16 @@ preview to run at the same time. Both listeners bind only to localhost.
   and runtime pose workflow.
 - `scripts/ots_pose_controller.gd` — IK/FK controls, torso posing, marker reset,
   and editor capture/apply support.
-- `tools/emacs/godot-pose-mode.el` — Emacs major mode for versioned pose profiles.
+- `tools/emacs/godot-pose-mode.el` — Emacs modes for actor poses and multi-actor shots.
 - `tools/image_to_gdpose.py` — MediaPipe and SAM 3D/MHR JSON pose converter.
 - `tools/sam3d_export_json.py` — optional wrapper for exporting official SAM 3D Body results.
-- `poses/` — reusable, Git-friendly pose documents.
+- `addons/ots_render_capture/` — editor-camera capture of beauty, linear depth,
+  separate female/male masks, a combined character-ID mask, and camera metadata.
+- `OTS_RENDER_CAPTURE.md` — how to frame and export image-generation passes
+  directly from the Godot editor viewport.
+- `poses/female-poses.gdpose` — reusable female IK/FK pose library.
+- `poses/male-carrier-poses.gdpose` — reusable male carrier FK pose library.
+- `poses/shots/` — shot manifests that compose named poses without copying rig data.
 - `demos/` — original examples plus the OTS and manual-pose scenes.
 
 ## Attribution and license

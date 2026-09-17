@@ -23,7 +23,7 @@ python3 -m pip install -r tools/requirements-image-pose.txt
 
 ```sh
 python3 tools/image_to_gdpose.py '/absolute/path/reference.png' \
-  --template poses/ots-carry.gdpose \
+  --template poses/female-poses.gdpose \
   --output poses/reference-coarse.gdpose \
   --pose-name reference_coarse
 ```
@@ -34,7 +34,7 @@ another document reader:
 
 ```sh
 python3 tools/image_to_gdpose.py '/absolute/path/reference.png' \
-  --template poses/ots-carry.gdpose \
+  --template poses/female-poses.gdpose \
   --output poses/reference-coarse.gdpose \
   --pose-name reference_coarse --activate
 ```
@@ -44,7 +44,7 @@ to an editor that is already listening on port 7007:
 
 ```sh
 python3 tools/image_to_gdpose.py '/absolute/path/reference.png' \
-  --template poses/ots-carry.gdpose \
+  --template poses/female-poses.gdpose \
   --output poses/reference-coarse.gdpose \
   --pose-name reference_coarse \
   --send 127.0.0.1:7007
@@ -105,8 +105,8 @@ the same converter:
 ```sh
 python3 tools/image_to_gdpose.py poses/reverse_ots_female_sam3d.mhr70.json \
   --format sam3d-mhr \
-  --template poses/ots-carry.gdpose \
-  --output poses/ots-carry.gdpose \
+  --template poses/female-poses.gdpose \
+  --output poses/female-poses.gdpose \
   --pose-name reverse_ots_female_sam3d \
   --mhr-axis camera \
   --torso-roll-degrees 180
@@ -128,7 +128,7 @@ zero-based index:
 
 ```sh
 python3 tools/image_to_gdpose.py sam3d_output.json --format sam3d-mhr \
-  --person-index 1 --template poses/ots-carry.gdpose \
+  --person-index 1 --template poses/female-poses.gdpose \
   --output poses/reverse-ots-carried.gdpose \
   --pose-name reverse_ots_carried
 ```

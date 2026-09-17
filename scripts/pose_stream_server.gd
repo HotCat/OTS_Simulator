@@ -250,8 +250,7 @@ func _capture_message(message: Dictionary) -> Dictionary:
 				active_modifier_count += 1
 
 	var controls: Dictionary = {}
-	var controls_root_path := NodePath(str(character_spec.get("controls_path", "../PoseControls")))
-	var controls_root := character.get_node_or_null(controls_root_path) as Node3D
+	var controls_root := _find_controls_root(character, character_spec)
 	if controls_root != null:
 		for child in controls_root.get_children():
 			if child is Node3D:
@@ -362,10 +361,11 @@ func _apply_ik_controls(character: Node3D, character_spec: Dictionary, pose: Dic
 	var controls_value = pose.get("ik", {})
 	if not controls_value is Dictionary:
 		return {"applied": applied, "missing": missing}
-	var controls_root_path := NodePath(str(character_spec.get("controls_path", "../PoseControls")))
-	var controls_root := character.get_node_or_null(controls_root_path) as Node3D
+	if (controls_value as Dictionary).is_empty():
+		return {"applied": applied, "missing": missing}
+	var controls_root := _find_controls_root(character, character_spec)
 	if controls_root == null:
-		return {"applied": applied, "missing": [str(controls_root_path)]}
+		return {"applied": applied, "missing": [str(character_spec.get("controls_path", ""))]}
 	for control_name_value in (controls_value as Dictionary):
 		var control_name := str(control_name_value)
 		var control_data_value = controls_value[control_name_value]
@@ -378,6 +378,15 @@ func _apply_ik_controls(character: Node3D, character_spec: Dictionary, pose: Dic
 		_apply_node_transform(control, control_data_value as Dictionary)
 		applied += 1
 	return {"applied": applied, "missing": missing}
+
+func _find_controls_root(character: Node3D, character_spec: Dictionary) -> Node3D:
+	# An empty path explicitly declares an FK-only character. This prevents a
+	# second actor from accidentally capturing or driving another actor's scene-
+	# level PoseControls through the old ../PoseControls default.
+	var controls_path_string := str(character_spec.get("controls_path", "../PoseControls"))
+	if controls_path_string.is_empty():
+		return null
+	return character.get_node_or_null(NodePath(controls_path_string)) as Node3D
 
 func _apply_modifiers(skeleton: Skeleton3D, pose: Dictionary, mode: String) -> Dictionary:
 	var applied := 0

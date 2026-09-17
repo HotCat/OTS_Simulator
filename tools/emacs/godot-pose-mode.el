@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026
 ;; Author: Codex
-;; Version: 0.3.0
+;; Version: 0.4.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: tools, games, godot, animation
 
@@ -28,6 +28,8 @@
 ;; The transport is a persistent localhost TCP connection containing one JSON
 ;; object per line.  The exact same protocol can be used by ComfyUI, mocap, or
 ;; any other process; Emacs is a first-class client, not a required relay.
+;; A .gdshot document composes named poses from separate actor .gdpose files;
+;; C-c C-e resolves and sends every actor without duplicating skeleton data.
 
 ;;; Code:
 
@@ -84,6 +86,17 @@
     map)
   "Keymap for `godot-pose-mode'.")
 
+(defvar godot-shot-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-r") #'godot-shot-run-preview)
+    (define-key map (kbd "C-c C-e") #'godot-shot-send)
+    (define-key map (kbd "C-c C-t") #'godot-shot-send-to-runtime)
+    (define-key map (kbd "C-c C-s") #'godot-shot-save-to-project)
+    (define-key map (kbd "C-c C-v") #'godot-shot-validate)
+    (define-key map (kbd "C-c C-k") #'godot-pose-disconnect)
+    map)
+  "Keymap for `godot-shot-mode'.")
+
 ;;;###autoload
 (define-derived-mode godot-pose-mode js-json-mode "Godot-Pose"
   "Major mode for Git-friendly Godot IK/FK pose documents.
@@ -95,7 +108,18 @@ Use `C-c C-a' to switch that name through the minibuffer."
   (add-hook 'kill-buffer-hook #'godot-pose-disconnect nil t))
 
 ;;;###autoload
+(define-derived-mode godot-shot-mode js-json-mode "Godot-Shot"
+  "Major mode for composing multiple actor .gdpose documents.
+
+Each entry in `actors' selects a document and named pose. `C-c C-e' sends all
+selected actor poses to the Godot editor; `C-c C-t' targets the runtime."
+  (setq-local indent-tabs-mode nil)
+  (setq-local js-indent-level 2)
+  (add-hook 'kill-buffer-hook #'godot-pose-disconnect nil t))
+
+;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.gdpose\\'" . godot-pose-mode))
+(add-to-list 'auto-mode-alist '("\\.gdshot\\'" . godot-shot-mode))
 
 (defun godot-pose--parse-document ()
   "Parse and return the current .gdpose buffer as an alist."
@@ -142,6 +166,99 @@ Signal `user-error' when required fields are missing."
          (active-entry (godot-pose--validate-document document)))
     (message "Valid Godot pose document v1; active pose: %s"
              (car active-entry))))
+
+(defun godot-shot--parse-document ()
+  "Parse and return the current .gdshot buffer as an alist."
+  (condition-case error-data
+      (save-excursion
+        (goto-char (point-min))
+        (json-parse-buffer
+         :object-type 'alist
+         :array-type 'list
+         :null-object nil
+         :false-object :json-false))
+    (json-parse-error
+     (user-error "Invalid .gdshot JSON: %s" (error-message-string error-data)))))
+
+(defun godot-shot--validate-document (document)
+  "Validate shot DOCUMENT and return its actors object."
+  (unless (equal (godot-pose--get "schema" document) "godot-shot-document")
+    (user-error "Expected schema \"godot-shot-document\""))
+  (unless (= (or (godot-pose--get "version" document) 0) 1)
+    (user-error "Only .gdshot document version 1 is supported"))
+  (let ((actors (godot-pose--get "actors" document)))
+    (unless (and (listp actors) actors)
+      (user-error "The shot needs a non-empty actors object"))
+    (dolist (actor actors)
+      (let* ((actor-name (format "%s" (car actor)))
+             (selection (cdr actor))
+             (document-path (godot-pose--get "document" selection))
+             (pose-name (godot-pose--get "pose" selection)))
+        (unless (and (stringp document-path) (not (string-empty-p document-path)))
+          (user-error "Shot actor %s needs a document path" actor-name))
+        (unless (and (stringp pose-name) (not (string-empty-p pose-name)))
+          (user-error "Shot actor %s needs a pose name" actor-name))))
+    actors))
+
+(defun godot-shot--read-pose-document (path)
+  "Read a pose document from absolute PATH, preferring an open buffer."
+  (unless (file-readable-p path)
+    (user-error "Shot pose document is not readable: %s" path))
+  (let ((open-buffer (find-buffer-visiting path)))
+    (if open-buffer
+        (with-current-buffer open-buffer
+          (godot-pose--parse-document))
+      (with-temp-buffer
+        (insert-file-contents path)
+        (condition-case error-data
+            (json-parse-buffer
+             :object-type 'alist
+             :array-type 'list
+             :null-object nil
+             :false-object :json-false)
+          (json-parse-error
+           (user-error "Invalid pose document %s: %s"
+                       path (error-message-string error-data))))))))
+
+(defun godot-shot--actor-specs (shot-document)
+  "Resolve SHOT-DOCUMENT into actor pose specifications."
+  (unless buffer-file-name
+    (user-error "Save the .gdshot buffer before resolving relative documents"))
+  (let ((base-directory (file-name-directory buffer-file-name))
+        (actors (godot-shot--validate-document shot-document))
+        resolved)
+    (dolist (actor actors (nreverse resolved))
+      (let* ((actor-name (format "%s" (car actor)))
+             (selection (cdr actor))
+             (relative-path (godot-pose--get "document" selection))
+             (document-path (expand-file-name relative-path base-directory))
+             (pose-name (godot-pose--get "pose" selection))
+             (pose-document (godot-shot--read-pose-document document-path))
+             (_ (godot-pose--validate-document pose-document))
+             (poses (godot-pose--get "poses" pose-document))
+             (pose-entry (assoc-string pose-name poses))
+             (character (godot-pose--get "character" pose-document)))
+        (unless pose-entry
+          (user-error "Shot actor %s selects missing pose %S in %s"
+                      actor-name pose-name relative-path))
+        (unless (listp character)
+          (user-error "Shot actor %s document has no character object" actor-name))
+        (push `(("actor_name" . ,actor-name)
+                ("document_path" . ,document-path)
+                ("pose_name" . ,pose-name)
+                ("character" . ,character)
+                ("pose" . ,(cdr pose-entry)))
+              resolved)))))
+
+(defun godot-shot-validate ()
+  "Validate this shot and every referenced actor pose."
+  (interactive)
+  (let* ((document (godot-shot--parse-document))
+         (specs (godot-shot--actor-specs document)))
+    (message "Valid Godot shot document v1; %d actors: %s"
+             (length specs)
+             (mapconcat (lambda (spec) (godot-pose--get "actor_name" spec))
+                        specs ", "))))
 
 (defun godot-pose--endpoint (document &optional endpoint-key)
   "Return (HOST . PORT) from ENDPOINT-KEY in DOCUMENT.
@@ -456,6 +573,40 @@ When CHOOSE-POSE is non-nil, choose the active pose first."
              (process-get process 'godot-pose-host)
              (process-get process 'godot-pose-port))))
 
+(defun godot-shot-send ()
+  "Apply every actor selected by the current shot to the Godot editor."
+  (interactive)
+  (godot-shot--send-to-endpoint "endpoint" "Godot editor"))
+
+(defun godot-shot-send-to-runtime ()
+  "Apply every actor selected by the current shot to the Godot runtime."
+  (interactive)
+  (godot-shot--send-to-endpoint "runtime_endpoint" "Godot runtime"))
+
+(defun godot-shot--send-to-endpoint (endpoint-key endpoint-label)
+  "Send this shot through ENDPOINT-KEY named ENDPOINT-LABEL."
+  (let* ((shot-document (godot-shot--parse-document))
+         (specs (godot-shot--actor-specs shot-document))
+         (process (godot-pose--ensure-stream shot-document endpoint-key)))
+    (dolist (spec specs)
+      (let ((message-object
+             `(("protocol" . "godot-pose-stream")
+               ("version" . 1)
+               ("type" . "pose.apply")
+               ("request_id" . ,(godot-pose--request-id))
+               ("source" . (("application" . "Emacs")
+                            ("buffer" . ,(buffer-name))
+                            ("shot_actor" . ,(godot-pose--get "actor_name" spec))))
+               ("character" . ,(godot-pose--get "character" spec))
+               ("pose_name" . ,(godot-pose--get "pose_name" spec))
+               ("pose" . ,(godot-pose--get "pose" spec)))))
+        (process-send-string process (concat (json-encode message-object) "\n"))))
+    (message "Sent %d shot actors to %s at %s:%s"
+             (length specs)
+             endpoint-label
+             (process-get process 'godot-pose-host)
+             (process-get process 'godot-pose-port))))
+
 (defun godot-pose-select-active (pose-name)
   "Set POSE-NAME as this document's active_pose."
   (interactive
@@ -504,6 +655,27 @@ If it is already inside the project, this is a normal `save-buffer'."
         (write-file destination)
         (message "Saved Git-trackable pose document: %s" destination)))))
 
+(defun godot-shot-save-to-project ()
+  "Save this shot document inside its declared Godot project."
+  (interactive)
+  (let* ((document (godot-shot--parse-document))
+         (_ (godot-shot--validate-document document))
+         (project-root (file-truename (godot-pose--project-root document)))
+         (current (and buffer-file-name (file-truename buffer-file-name))))
+    (if (and current (file-in-directory-p current project-root))
+        (progn
+          (save-buffer)
+          (message "Saved Git-trackable shot document: %s" current))
+      (let* ((shot-directory (expand-file-name "poses/shots" project-root))
+             (default-name (or (and buffer-file-name
+                                    (file-name-nondirectory buffer-file-name))
+                               "shot-01.gdshot"))
+             (destination (read-file-name "Save shot document in project: "
+                                          shot-directory nil nil default-name)))
+        (make-directory (file-name-directory destination) t)
+        (write-file destination)
+        (message "Saved Git-trackable shot document: %s" destination)))))
+
 (defun godot-pose-run-preview ()
   "Start the Godot runtime scene declared by this pose document."
   (interactive)
@@ -522,6 +694,25 @@ If it is already inside the project, this is a normal `save-buffer'."
                          "--scene" scene))
     (set-process-query-on-exit-flag godot-pose--preview-process nil)
     (message "Started Godot pose preview: %s" scene)))
+
+(defun godot-shot-run-preview ()
+  "Start the Godot runtime scene declared by this shot document."
+  (interactive)
+  (let* ((document (godot-shot--parse-document))
+         (_ (godot-shot--actor-specs document))
+         (project-root (godot-pose--project-root document))
+         (scene (or (godot-pose--get "preview_scene" document)
+                    "res://demos/my_manual_rig_pose.tscn"))
+         (log-buffer (get-buffer-create "*Godot Pose Preview*")))
+    (when (process-live-p godot-pose--preview-process)
+      (user-error "A Godot pose preview is already running"))
+    (setq godot-pose--preview-process
+          (start-process "godot-pose-preview" log-buffer
+                         godot-pose-godot-executable
+                         "--path" project-root
+                         "--scene" scene))
+    (set-process-query-on-exit-flag godot-pose--preview-process nil)
+    (message "Started Godot shot preview: %s" scene)))
 
 (defun godot-pose-disconnect ()
   "Close this buffer's persistent Godot pose stream."

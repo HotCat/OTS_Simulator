@@ -1,0 +1,91 @@
+{
+  "schema": "godot-pose-document",
+  "version": 1,
+  "project_root": "..",
+  "preview_scene": "res://demos/my_manual_rig_pose.tscn",
+  "endpoint": {
+    "host": "127.0.0.1",
+    "port": 7007
+  },
+  "runtime_endpoint": {
+    "host": "127.0.0.1",
+    "port": 7008
+  },
+  "character": {
+    "node_path": "MaleCarrier",
+    "skeleton_path": "Skeleton3D",
+    "controls_path": ""
+  },
+  "active_pose": "rest_standing",
+  "rig": {
+    "name": "male_1785818633452_humanizer_proxy",
+    "bone_space": "local_pose",
+    "euler_order": "YXZ",
+    "quaternion_order": "xyzw",
+    "bones": [
+      { "name": "Root", "parent": null },
+      { "name": "Hips", "parent": "Root" },
+      { "name": "LeftUpperLeg", "parent": "Hips" },
+      { "name": "LeftLowerLeg", "parent": "LeftUpperLeg" },
+      { "name": "LeftFoot", "parent": "LeftLowerLeg" },
+      { "name": "LeftToes", "parent": "LeftFoot" },
+      { "name": "RightUpperLeg", "parent": "Hips" },
+      { "name": "RightLowerLeg", "parent": "RightUpperLeg" },
+      { "name": "RightFoot", "parent": "RightLowerLeg" },
+      { "name": "RightToes", "parent": "RightFoot" },
+      { "name": "Spine", "parent": "Hips" },
+      { "name": "Chest", "parent": "Spine" },
+      { "name": "UpperChest", "parent": "Chest" },
+      { "name": "LeftShoulder", "parent": "UpperChest" },
+      { "name": "LeftUpperArm", "parent": "LeftShoulder" },
+      { "name": "LeftLowerArm", "parent": "LeftUpperArm" },
+      { "name": "LeftHand", "parent": "LeftLowerArm" },
+      { "name": "LeftIndexProximal", "parent": "LeftHand" },
+      { "name": "LeftIndexIntermediate", "parent": "LeftIndexProximal" },
+      { "name": "LeftIndexDistal", "parent": "LeftIndexIntermediate" },
+      { "name": "LeftMiddleProximal", "parent": "LeftHand" },
+      { "name": "LeftMiddleIntermediate", "parent": "LeftMiddleProximal" },
+      { "name": "LeftMiddleDistal", "parent": "LeftMiddleIntermediate" },
+      { "name": "LeftLittleProximal", "parent": "LeftHand" },
+      { "name": "LeftLittleIntermediate", "parent": "LeftLittleProximal" },
+      { "name": "LeftLittleDistal", "parent": "LeftLittleIntermediate" },
+      { "name": "LeftRingProximal", "parent": "LeftHand" },
+      { "name": "LeftRingIntermediate", "parent": "LeftRingProximal" },
+      { "name": "LeftRingDistal", "parent": "LeftRingIntermediate" },
+      { "name": "LeftThumbMetacarpal", "parent": "LeftHand" },
+      { "name": "LeftThumbProximal", "parent": "LeftThumbMetacarpal" },
+      { "name": "LeftThumbDistal", "parent": "LeftThumbProximal" },
+      { "name": "RightShoulder", "parent": "UpperChest" },
+      { "name": "RightUpperArm", "parent": "RightShoulder" },
+      { "name": "RightLowerArm", "parent": "RightUpperArm" },
+      { "name": "RightHand", "parent": "RightLowerArm" },
+      { "name": "RightIndexProximal", "parent": "RightHand" },
+      { "name": "RightIndexIntermediate", "parent": "RightIndexProximal" },
+      { "name": "RightIndexDistal", "parent": "RightIndexIntermediate" },
+      { "name": "RightMiddleProximal", "parent": "RightHand" },
+      { "name": "RightMiddleIntermediate", "parent": "RightMiddleProximal" },
+      { "name": "RightMiddleDistal", "parent": "RightMiddleIntermediate" },
+      { "name": "RightLittleProximal", "parent": "RightHand" },
+      { "name": "RightLittleIntermediate", "parent": "RightLittleProximal" },
+      { "name": "RightLittleDistal", "parent": "RightLittleIntermediate" },
+      { "name": "RightRingProximal", "parent": "RightHand" },
+      { "name": "RightRingIntermediate", "parent": "RightRingProximal" },
+      { "name": "RightRingDistal", "parent": "RightRingIntermediate" },
+      { "name": "RightThumbMetacarpal", "parent": "RightHand" },
+      { "name": "RightThumbProximal", "parent": "RightThumbMetacarpal" },
+      { "name": "RightThumbDistal", "parent": "RightThumbProximal" },
+      { "name": "Neck", "parent": "UpperChest" },
+      { "name": "Head", "parent": "Neck" }
+    ],
+    "ik_controls": [],
+    "modifiers": []
+  },
+  "poses": {
+    "rest_standing": {
+      "mode": "fk",
+      "reset_to_rest": true,
+      "euler_order": "YXZ",
+      "bones": {}
+    }
+  }
+}

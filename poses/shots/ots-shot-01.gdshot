@@ -1,0 +1,24 @@
+{
+  "schema": "godot-shot-document",
+  "version": 1,
+  "project_root": "../..",
+  "preview_scene": "res://demos/my_manual_rig_pose.tscn",
+  "endpoint": {
+    "host": "127.0.0.1",
+    "port": 7007
+  },
+  "runtime_endpoint": {
+    "host": "127.0.0.1",
+    "port": 7008
+  },
+  "actors": {
+    "female": {
+      "document": "../female-poses.gdpose",
+      "pose": "ots_female_20260917_093318"
+    },
+    "male_carrier": {
+      "document": "../male-carrier-poses.gdpose",
+      "pose": "rest_standing"
+    }
+  }
+}
