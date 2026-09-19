@@ -15,6 +15,11 @@ const HUMANOID_WAIST_BONES: Array[String] = ["Hips", "Spine", "Chest", "UpperChe
 const WAIST_WEIGHTS := [0.12, 0.30, 0.32, 0.26]
 const BODY_MODIFIERS := [&"pelvis_control", &"center_back_ik", &"neck_ik"]
 const LIMB_IK_MODIFIERS := [&"r_leg", &"l_leg", &"r_arm", &"l_arm"]
+const GIZMO_CONTROL_NAMES: Array[String] = [
+	"pelvis_target", "center_back_target", "neck_target", "head_target",
+	"r_feet_marker", "r_feet_pole", "l_feet_marker", "l_feet_pole",
+	"r_arm_marker", "r_arm_pole", "l_arm_marker", "l_arm_pole",
+]
 
 @export_category("Manual OTS Pose")
 @export var manual_pose_enabled := false:
@@ -53,6 +58,8 @@ const LIMB_IK_MODIFIERS := [&"r_leg", &"l_leg", &"r_arm", &"l_arm"]
 @export_tool_button("Apply waist bend") var apply_waist_action: Callable = apply_waist_bend
 @export_tool_button("Apply proxy forward drape") var apply_forward_drape_action: Callable = apply_proxy_forward_drape
 @export_tool_button("Restore proxy control markers") var restore_markers_action: Callable = restore_proxy_control_layout
+@export_tool_button("Enable gizmo IK editing") var enable_gizmo_ik_action: Callable = enable_gizmo_ik_editing
+@export_tool_button("Freeze evaluated pose for FK gizmos") var freeze_fk_gizmo_action: Callable = freeze_evaluated_pose_for_fk_gizmos
 @export_tool_button("Bake current IK pose to bones") var bake_ik_action: Callable = bake_current_ik_pose_to_bones
 @export_tool_button("Commit current FK adjustments for saving") var commit_fk_action: Callable = commit_current_fk_pose_for_saving
 
@@ -76,8 +83,14 @@ var _captured_bone_globals: Array[Transform3D] = []
 var _fk_capture_queued := false
 var _suppress_fk_capture := false
 var _external_pose_preview_depth := 0
+var _gizmo_marker_snapshot: Dictionary = {}
+var _suppress_gizmo_watch_frames := 0
+var _ignore_external_marker_frames := 0
+var _head_ik_enabled := false
 
 func _ready() -> void:
+	set_process(Engine.is_editor_hint())
+	_snapshot_gizmo_markers()
 	var skeleton := _get_skeleton()
 	if skeleton != null:
 		_restore_saved_fk_pose(skeleton)
@@ -87,6 +100,28 @@ func _ready() -> void:
 	if manual_pose_enabled:
 		_queue_pose_refresh(true)
 
+func _process(_delta: float) -> void:
+	if not Engine.is_editor_hint():
+		return
+	if _suppress_gizmo_watch_frames > 0:
+		_suppress_gizmo_watch_frames -= 1
+		_snapshot_gizmo_markers()
+		return
+	# A pose received over pose.frame/pose.apply is an intentional external
+	# edit. Do not mistake those writes for a user's first gizmo drag.
+	if _external_pose_preview_depth > 0 or _ignore_external_marker_frames > 0:
+		_ignore_external_marker_frames = maxi(0, _ignore_external_marker_frames - 1)
+		_snapshot_gizmo_markers()
+		return
+	var changed_controls := _changed_gizmo_controls()
+	if changed_controls.is_empty():
+		return
+	_snapshot_gizmo_markers()
+	# The scene is deliberately saved with IK off so FK edits and imported poses
+	# are not fought on load. As soon as a user actually drags a PoseControls
+	# handle, switch into target-driven IK and evaluate the stack immediately.
+	_enable_gizmo_ik_for_controls(changed_controls)
+
 func reset_to_t_pose() -> void:
 	manual_pose_enabled = true
 	waist_bend_degrees = 0.0
@@ -94,6 +129,7 @@ func reset_to_t_pose() -> void:
 	waist_twist_degrees = 0.0
 	body_ik_enabled = false
 	limb_ik_enabled = false
+	_head_ik_enabled = false
 	pose_mode_status = "T-pose / FK mode (all IK modifiers disabled)"
 	restore_proxy_control_layout()
 	_queue_pose_refresh(true)
@@ -115,6 +151,7 @@ func apply_proxy_forward_drape() -> void:
 	waist_twist_degrees = 0.0
 	body_ik_enabled = true
 	limb_ik_enabled = true
+	_head_ik_enabled = false
 	pose_mode_status = "Target-driven forward-drape IK mode"
 	var controls := get_node_or_null("../PoseControls") as Node3D
 	if controls == null:
@@ -187,6 +224,117 @@ func begin_external_pose_preview() -> void:
 
 func end_external_pose_preview() -> void:
 	_external_pose_preview_depth = maxi(0, _external_pose_preview_depth - 1)
+	_snapshot_gizmo_markers()
+	# The stream server ends its preview scope in the same frame. Ignore the
+	# editor's next couple of idle ticks so streamed marker writes cannot
+	# unexpectedly switch the scene into manual gizmo mode.
+	_ignore_external_marker_frames = 2
+
+func enable_gizmo_ik_editing() -> void:
+	manual_pose_enabled = true
+	body_ik_enabled = true
+	limb_ik_enabled = true
+	_head_ik_enabled = false
+	pose_mode_status = "Gizmo IK mode: drag PoseControls markers to pose the female"
+	var skeleton := _get_skeleton()
+	if skeleton != null:
+		_refresh_modifiers()
+		skeleton.advance(0.0)
+
+func freeze_evaluated_pose_for_fk_gizmos() -> void:
+	"""Keep the currently evaluated pose, then release every IK writer.
+
+	SAM3D profiles are intentionally target-driven. That is useful for coarse
+	placement, but it means a Skeleton3D bone gizmo edit is overwritten on the
+	next modifier evaluation. This action snapshots the evaluated local poses,
+	disables the writers, reapplies the snapshot, and leaves the scene in the
+	ordinary FK editing mode. The source .gdpose profile is not modified and can
+	be re-applied later from Emacs.
+	"""
+	var skeleton := _get_skeleton()
+	if skeleton == null:
+		pose_mode_status = "FK gizmo release failed: Skeleton3D was not found"
+		return
+	# Ensure the final modifier result is present before taking the snapshot.
+	skeleton.advance(0.0)
+	skeleton.force_update_all_bone_transforms()
+	var snapshot: Array[Transform3D] = []
+	snapshot.resize(skeleton.get_bone_count())
+	for bone_idx in skeleton.get_bone_count():
+		snapshot[bone_idx] = skeleton.get_bone_pose(bone_idx)
+
+	# Disable every SkeletonModifier3D directly. The controller flags are also
+	# cleared so a deferred Inspector refresh cannot turn the stack back on.
+	manual_pose_enabled = false
+	body_ik_enabled = false
+	limb_ik_enabled = false
+	_head_ik_enabled = false
+	_pose_refresh_queued = false
+	_modifier_refresh_queued = false
+	_full_reset_requested = false
+	for child in skeleton.get_children():
+		if child is SkeletonModifier3D:
+			(child as SkeletonModifier3D).active = false
+
+	_suppress_fk_capture = true
+	for bone_idx in skeleton.get_bone_count():
+		skeleton.set_bone_pose(bone_idx, snapshot[bone_idx])
+	skeleton.force_update_all_bone_transforms()
+	_capture_local_fk_pose(skeleton)
+	_suppress_fk_capture = false
+	pose_mode_status = "FK gizmo edit mode: evaluated pose frozen; reapply the profile to restore IK"
+	_mark_scene_unsaved()
+
+func _enable_gizmo_ik_for_controls(changed_controls: Array[String]) -> void:
+	manual_pose_enabled = true
+	var body_changed := false
+	var limb_changed := false
+	for control_name in changed_controls:
+		if control_name in ["pelvis_target", "center_back_target", "neck_target", "head_target"]:
+			body_changed = true
+		if control_name == "head_target":
+			_head_ik_enabled = true
+		if control_name in [
+			"r_feet_marker", "r_feet_pole", "l_feet_marker", "l_feet_pole",
+			"r_arm_marker", "r_arm_pole", "l_arm_marker", "l_arm_pole",
+		]:
+			limb_changed = true
+	# Preserve an already enabled stack; only turn on the part touched by the
+	# gizmo. This makes a single pelvis experiment predictable and avoids
+	# suddenly pulling the feet away from a carefully tuned FK pose.
+	if body_changed:
+		body_ik_enabled = true
+	if limb_changed:
+		limb_ik_enabled = true
+	pose_mode_status = "Gizmo IK mode: %s" % ", ".join(changed_controls)
+	var skeleton := _get_skeleton()
+	if skeleton != null:
+		_refresh_modifiers()
+		skeleton.advance(0.0)
+
+func _snapshot_gizmo_markers() -> void:
+	_gizmo_marker_snapshot.clear()
+	var controls := get_node_or_null("../PoseControls") as Node3D
+	if controls == null:
+		return
+	for control_name in GIZMO_CONTROL_NAMES:
+		var control := controls.get_node_or_null(control_name) as Node3D
+		if control != null:
+			_gizmo_marker_snapshot[control_name] = control.transform
+
+func _changed_gizmo_controls() -> Array[String]:
+	var changed: Array[String] = []
+	var controls := get_node_or_null("../PoseControls") as Node3D
+	if controls == null:
+		return changed
+	for control_name in GIZMO_CONTROL_NAMES:
+		var control := controls.get_node_or_null(control_name) as Node3D
+		if control == null:
+			continue
+		var previous: Variant = _gizmo_marker_snapshot.get(control_name, null)
+		if previous == null or not (control.transform as Transform3D).is_equal_approx(previous as Transform3D):
+			changed.append(control_name)
+	return changed
 
 func _capture_current_fk_pose_for_bake() -> void:
 	var skeleton := _get_skeleton()
@@ -299,6 +447,7 @@ func _set_control_transform(controls: Node3D, control_name: String, control_posi
 	var control := controls.get_node_or_null(control_name) as Node3D
 	if control == null:
 		return
+	_suppress_gizmo_watch_frames = 2
 	control.position = control_position
 	control.rotation = Vector3.ZERO
 
@@ -345,6 +494,8 @@ func _refresh_modifiers() -> void:
 				child.active = body_ik_enabled
 			elif child.name in LIMB_IK_MODIFIERS:
 				child.active = limb_ik_enabled
+			elif child.name == &"head_look_at":
+				child.active = _head_ik_enabled
 			else:
 				# Gaze and hand-orientation helpers are intentionally off while
 				# manually posing; they can otherwise pull a solved limb apart.

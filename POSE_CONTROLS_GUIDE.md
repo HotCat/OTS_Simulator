@@ -77,12 +77,17 @@ resume viewport exploration.
 ## A reliable learning workflow
 
 1. Stop the running game and reload `my_manual_rig_pose.tscn` from disk.
-2. Expand `PoseControls` and select one handle.
-3. Press **F** in the 3D viewport to frame the selected handle.
-4. Use the **Move** gizmo first. Test rotation only on the parent character or
+2. Select `IK_character` and click **Enable gizmo IK editing** once if you want
+   to enter the mode explicitly. The controller also detects the first real
+   drag of a `PoseControls` marker and enables only the relevant IK stack
+   automatically. This keeps the scene FK-safe on load while making a marker
+   gizmo immediately useful.
+3. Expand `PoseControls` and select one handle.
+4. Press **F** in the 3D viewport to frame the selected handle.
+5. Use the **Move** gizmo first. Test rotation only on the parent character or
    on a bone; the IK handles in this scene are position goals.
-5. Move a pole only after the hand/foot is in a useful position.
-6. If you get an unexpected result, toggle the relevant modifier state on
+6. Move a pole only after the hand/foot is in a useful position.
+7. If you get an unexpected result, toggle the relevant modifier state on
    `IK_character`, instead of moving several targets at once.
 
 The Inspector buttons are explicit mode switches:
@@ -93,6 +98,7 @@ The Inspector buttons are explicit mode switches:
 | **Apply waist bend** | Disables both IK stacks and applies the waist slider rotations directly |
 | **Apply proxy forward drape** | Restores known-good handles and enables body + limb IK for target-driven OTS posing |
 | **Restore proxy control markers** | Resets only the handle positions; it does not reset bone poses or modifier state |
+| **Freeze evaluated pose for FK gizmos** | Keeps the current IK/SAM3D result, disables every modifier, and releases Skeleton3D bone gizmos for non-destructive fine editing |
 | **Bake current IK pose to bones** | Captures the evaluated IK result into all Skeleton3D bone poses, disables every modifier, and enters FK editing mode |
 
 After using a button in the editor, save the scene if you want that mode and
@@ -102,8 +108,11 @@ disk before testing if the Inspector was already open while the script changed.
 ### Baking IK for precise FK editing
 
 1. Use `PoseControls` with body and limb IK enabled to make the coarse pose.
-2. Select `IK_character` and click **Bake current IK pose to bones**.
-3. Wait until `Pose Mode Status` reports **Baked FK mode**.
+2. Select `IK_character` and click **Freeze evaluated pose for FK gizmos** when you
+   want to keep the profile reusable and simply fine-tune this preview. Use
+   **Bake current IK pose to bones** instead when you want the stronger baked
+   checkpoint workflow.
+3. Wait until `Pose Mode Status` reports **FK gizmo edit mode** (or **Baked FK mode**).
 4. Expand `IK_character/Skeleton3D`, switch to bone editing, and refine local
    bone rotations. IK is now disabled, so the controls no longer overwrite FK.
 5. Save the scene with **Command-S**. The editor marks the scene as modified

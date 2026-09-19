@@ -11,6 +11,8 @@ __pycache__/
 renders/
 # Local SAM 3D Body source and multi-gigabyte Hugging Face checkpoints.
 sam3d/
+# NLF TorchScript checkpoints are local runtime dependencies, not source.
+models/nlf/*.torchscript
 
 # Godot-specific ignores
 .import/

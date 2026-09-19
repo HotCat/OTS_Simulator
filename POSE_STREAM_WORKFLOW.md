@@ -159,9 +159,23 @@ Modes:
 - `ik`: reset the skeleton, move IK controls, and enable named modifiers.
 - `hybrid`: apply a local FK base first, then evaluate the named IK modifiers.
 
+An `ik` or `hybrid` profile remains modifier-driven after it is sent to the
+editor. Therefore direct `Skeleton3D` bone gizmos are expected to be
+overwritten by the active solvers. Select `IK_character` and use **Freeze
+evaluated pose for FK gizmos** to keep the displayed SAM3D result while
+temporarily disabling those solvers for precise bone edits. Re-sending the
+profile from Emacs restores its original IK behavior; the `.gdpose` file is
+never changed by the freeze operation.
+
 Bone transforms support `position`, `scale`, `rotation_degrees`, or the more
 precise `rotation_quaternion` in `[x, y, z, w]` order. The optional `weight`
 blends an individual bone from its current/rest value.
+
+Godot 4 bone pose rotations are **absolute local rotations**, not deltas from
+identity or `inverse(rest) * desired`. A producer that sends all bones must send
+the imported rest quaternion for every unobserved bone. Sending identity for a
+bone whose GLB rest rotation is non-identity destroys its bone-roll basis and
+causes twisted arms, hands, legs, feet, and fingers.
 
 ## Runtime stream protocol
 
@@ -252,3 +266,53 @@ streaming frames do not generate acknowledgements unless `ack` is true.
 
 The localhost binding is intentional. Do not expose the raw pose port to a
 network; use an authenticated relay if remote capture is added later.
+
+## Video motion fitting: NLF + SAM 3D Body
+
+`tools/video_to_pose_stream.py` is the external motion-capture path. It does
+not create an `Animation`, modify a `.tscn`, or bake IK. Instead it:
+
+1. samples NLF SMPL-24 geometry densely (15 FPS by default);
+2. samples SAM 3D Body MHR-127 orientations sparsely on CPU;
+3. uses SAM twist only on the axial torso chain, while arms, hands, legs, and
+   feet use NLF minimal-swing fitting in the target rig's own bone-roll basis;
+4. applies quaternion sign continuity, robust temporal smoothing, and simple
+   left/right foot-contact damping;
+5. retargets against the actual rest hierarchy in the female proxy GLB; and
+6. streams 56 local `[x, y, z, w]` quaternions as `pose.frame` at 30 FPS.
+
+On Apple Silicon, use the project's SAM environment. The tool bypasses NLF's
+public float64 wrapper (unsupported by MPS) but uses the same official scripted
+crop network. SAM 3D Body remains on CPU because its MHR TorchScript forward
+also requires float64.
+
+Fit the first four seconds and send them to the open Godot editor:
+
+```bash
+cd '/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6'
+
+/Users/hotcat/miniconda3/envs/sam_3d_body/bin/python \
+  tools/video_to_pose_stream.py \
+  '/Users/hotcat/zhouyu/windowSize/girl_dance_sequence_transfer3/003.mp4' \
+  --duration 4 \
+  --bbox 0 45 511 895
+```
+
+Inference writes two reproducible sidecars under
+`renders/mocap/girl_dance_003_first4s/`:
+
+- `nlf_sam3d_observations.json` contains sampled model observations;
+- `motion_pose_frames.json` contains the solved 120 × 56 quaternion frames.
+
+Replay the result instantly without loading either model:
+
+```bash
+/Users/hotcat/miniconda3/envs/sam_3d_body/bin/python \
+  tools/video_to_pose_stream.py \
+  --stream-cache renders/mocap/girl_dance_003_first4s/motion_pose_frames.json
+```
+
+Add `--loop` for continuous editor preview. Add `--no-stream` to fit/cache only,
+or `--reuse-observations` after changing temporal/retargeting code so the
+expensive observations are not recomputed. The default editor port is 7007;
+use `--port 7008` only for the running game receiver.

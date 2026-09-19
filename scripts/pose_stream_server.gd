@@ -186,11 +186,19 @@ func _apply_message(message: Dictionary) -> Dictionary:
 	_apply_character_transform(character, pose)
 	if bool(pose.get("reset_to_rest", true)):
 		skeleton.reset_bone_poses()
-	var bone_result := _apply_bones(skeleton, pose)
 	var control_result := _apply_ik_controls(character, character_spec, pose)
 	var modifier_result := _apply_modifiers(skeleton, pose, mode)
+	# Hybrid poses combine target-driven IK with explicit FK overrides. Let IK
+	# evaluate first, then apply absolute-local bone rotations last; otherwise a
+	# modifier such as pelvis_control or center_back_ik silently overwrites an
+	# intentional Hips/torso correction (for example a 180-degree front/back
+	# disambiguation). FK-only poses still take the same final-bone path, while IK
+	# poses simply have no bone overrides to apply.
+	if mode != "fk":
+		skeleton.force_update_all_bone_transforms()
+		skeleton.advance(0.0)
+	var bone_result := _apply_bones(skeleton, pose)
 	skeleton.force_update_all_bone_transforms()
-	skeleton.advance(0.0)
 	if character.has_method("end_external_pose_preview"):
 		character.call("end_external_pose_preview")
 
