@@ -1,0 +1,108 @@
+;;; test-godot-camera-control.el --- ERT tests for camera DSL -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'godot-camera-control)
+
+(ert-deftest godot-camera-builds-json-ready-linear-and-dwell-program ()
+  (godot-camera-program-begin :name "test" :loop t :viewport 2)
+  (godot-camera-g4 :seconds 0.25)
+  (godot-camera-g1 :x 1.0 :y 2.0 :z -3.0 :duration 4.0 :easing 'ease-in-out)
+  (let* ((program (godot-camera-current-program))
+         (commands (append (alist-get "commands" program nil nil #'string=) nil)))
+    (should (equal (alist-get "name" program nil nil #'string=) "test"))
+    (should (eq (alist-get "loop" program nil nil #'string=) t))
+    (should (= (alist-get "viewport_index" program nil nil #'string=) 1))
+    (should (= (length commands) 2))
+    (should (equal (alist-get "easing" (nth 1 commands) nil nil #'string=)
+                   "ease_in_out"))))
+
+(ert-deftest godot-camera-builds-clockwise-orbit ()
+  (godot-camera-program-begin)
+  (godot-camera-g2-orbit :degrees 30 :pivot '(0 1 2) :duration 2)
+  (let ((command (car godot-camera--commands)))
+    (should (equal (alist-get "kind" command nil nil #'string=) "g2"))
+    (should (= (alist-get "yaw_degrees" command nil nil #'string=) 30))
+    (should (equal (append (alist-get "pivot" command nil nil #'string=) nil)
+                   '(0 1 2)))))
+
+(ert-deftest godot-camera-rejects-invalid-vector ()
+  (godot-camera-program-begin)
+  (should-error (godot-camera-g5 :control1 '(1 2)) :type 'user-error))
+
+(ert-deftest godot-camera-initial-view-prefers-quaternion ()
+  (godot-camera-program-begin :name "quaternion-shot")
+  (godot-camera-set-initial-view
+   :position '(1.0 2.0 -3.0)
+   :quaternion '(0.1 0.2 0.3 0.9))
+  (let* ((program (godot-camera-current-program))
+         (view (alist-get "initial_view" program nil nil #'string=)))
+    (should (equal (append (alist-get "position" view nil nil #'string=) nil)
+                   '(1.0 2.0 -3.0)))
+    (should (equal (append (alist-get "quaternion_xyzw" view nil nil #'string=) nil)
+                   '(0.1 0.2 0.3 0.9)))
+    (should-not (alist-get "rotation_degrees" view nil nil #'string=))))
+
+(ert-deftest godot-camera-initial-view-accepts-euler-fallback ()
+  (godot-camera-program-begin)
+  (godot-camera-set-initial-view :x 1 :y 2 :z 3 :pitch -20 :roll 4 :yaw 90)
+  (let* ((program (godot-camera-current-program))
+         (view (alist-get "initial_view" program nil nil #'string=)))
+    (should (equal (append (alist-get "rotation_degrees" view nil nil #'string=) nil)
+                   '(-20 90 4)))))
+
+(ert-deftest godot-camera-exposes-all-five-walk-transport-actions ()
+  (let (messages)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (push (cons type properties) messages))))
+      (godot-female-walk-play)
+      (godot-female-walk-pause)
+      (godot-female-walk-restart)
+      (godot-female-walk-refresh-trajectory)
+      (godot-female-walk-record-camera-motion))
+    (should
+     (equal (mapcar #'car (nreverse messages))
+            '("walk.play"
+              "walk.pause"
+              "walk.restart"
+              "walk.refresh_trajectory"
+              "walk.record_camera_motion")))
+    (dolist (message messages)
+      (should
+       (equal (cdr (assoc "controller_node" (cdr message)))
+              "FemaleWalkController")))))
+
+(ert-deftest godot-walk-record-camera-motion-sends-video-options ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties))))
+              ((symbol-function 'godot-camera--vector2)
+               (lambda (value _label) (vconcat value))))
+      (godot-female-walk-record-camera-motion
+       :duration 8.0 :fps 24 :resolution '(1280 720)
+       :start-delay 1.5 :keep-frames t :viewport 2))
+    (should (equal (car message) "walk.record_camera_motion"))
+    (let* ((options (cdr (assoc "options" (cdr message))))
+           (duration (cdr (assoc "duration" options)))
+           (fps (cdr (assoc "fps" options)))
+           (resolution (cdr (assoc "resolution" options))))
+      (should (= duration 8.0))
+      (should (= fps 24))
+      (should (equal (append resolution nil) '(1280 720)))
+      (should (= (cdr (assoc "viewport" options)) 2))
+      (should (eq (cdr (assoc "keep_frames" options)) t)))))
+
+(ert-deftest godot-walk-record-camera-motion-auto-clips-to-program ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties)))))
+      (godot-female-walk-record-camera-motion
+       :duration 'camera-program :program-end-padding 0.25 :fps 24))
+    (let ((options (cdr (assoc "options" (cdr message)))))
+      (should (eq (cdr (assoc "auto_clip_to_camera_program" options)) t))
+      (should (= (cdr (assoc "program_end_padding" options)) 0.25))
+      (should-not (assoc "duration" options)))))
+
+;;; test-godot-camera-control.el ends here

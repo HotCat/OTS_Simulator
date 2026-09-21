@@ -662,6 +662,310 @@ def infer_foot_contacts(nlf_names: list[str], positions: np.ndarray, fps: float)
     return result
 
 
+def estimate_rig_height(rig: Rig) -> float:
+    """Estimate the target avatar height in the GLB's scene units."""
+    positions: list[np.ndarray] = []
+    globals_at_rest: list[np.ndarray] = []
+    for index in range(len(rig.names)):
+        parent = int(rig.parents[index])
+        if parent < 0:
+            position = rig.translations[index].copy()
+            rotation = rig.rest_local[index]
+        else:
+            position = positions[parent] + rotate_vector(
+                globals_at_rest[parent], rig.translations[index]
+            )
+            rotation = quat_multiply(globals_at_rest[parent], rig.rest_local[index])
+        positions.append(position)
+        globals_at_rest.append(rotation)
+    values = np.asarray(positions, dtype=np.float64)
+    return max(1e-6, float(values[:, 1].max() - values[:, 1].min()))
+
+
+def infer_root_motion(target: Rig, nlf_names: list[str], positions: np.ndarray,
+                      contacts: Mapping[str, Sequence[bool]], fps: float,
+                      mode: str = "foot-contact", lock_strength: float = 0.85,
+                      scale_override: float | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+    """Infer parent-node translation while retaining pelvis wobble in the bones.
+
+    Raw pelvis displacement supplies gait timing. During a planted-foot interval,
+    the foot's relative position to the pelvis supplies a contact constraint;
+    blending that constraint with raw pelvis motion removes camera/inference
+    drift without flattening the Hips quaternion motion. This is root motion,
+    not a second pelvis animation channel.
+    """
+    names = {name: index for index, name in enumerate(nlf_names)}
+    required = ("lhip", "rhip", "lank", "rank")
+    if any(name not in names for name in required):
+        return np.zeros((len(positions), 3), dtype=np.float64), {
+            "mode": "off", "reason": "NLF skeleton lacks hips or ankles", "scale": 1.0,
+        }
+    pelvis = (positions[:, names["lhip"]] + positions[:, names["rhip"]]) * 0.5
+    head_height = positions[:, names.get("head", names["lhip"]), :][:, 1]
+    ankle_heights = positions[:, [names["lank"], names["rank"]], :][:, :, 1]
+    observed_height = float(np.max(head_height) - np.min(ankle_heights))
+    if not math.isfinite(observed_height) or observed_height < 1e-6:
+        observed_height = 1.0
+    scale = float(scale_override) if scale_override is not None else estimate_rig_height(target) / observed_height
+    scale = max(1e-6, scale)
+    raw = (pelvis - pelvis[0]) * scale
+    if mode == "off":
+        return np.zeros_like(raw), {"mode": "off", "scale": scale}
+    if mode == "pelvis":
+        return raw, {"mode": "pelvis", "scale": scale, "contact_lock_strength": 0.0}
+
+    strength = min(1.0, max(0.0, float(lock_strength)))
+    local_feet = {
+        "left": positions[:, names["lank"]] - pelvis,
+        "right": positions[:, names["rank"]] - pelvis,
+    }
+    result = np.zeros_like(raw)
+    anchors: dict[str, np.ndarray | None] = {"left": None, "right": None}
+    previous_contact = {"left": False, "right": False}
+    for frame in range(len(raw)):
+        candidates: list[np.ndarray] = []
+        for side in ("left", "right"):
+            active = bool(contacts.get(side, [False] * len(raw))[frame])
+            if active and not previous_contact[side]:
+                anchors[side] = raw[frame] + local_feet[side][frame] * scale
+            if active and anchors[side] is not None:
+                candidates.append(anchors[side] - local_feet[side][frame] * scale)
+            if not active:
+                anchors[side] = None
+            previous_contact[side] = active
+        if candidates:
+            locked = np.mean(np.asarray(candidates), axis=0)
+            result[frame] = raw[frame] * (1.0 - strength) + locked * strength
+        else:
+            result[frame] = raw[frame]
+    result[0] = np.zeros(3, dtype=np.float64)
+    return result, {
+        "mode": "foot-contact", "scale": scale,
+        "contact_lock_strength": strength,
+        "target_height": estimate_rig_height(target),
+        "observed_height": observed_height,
+    }
+
+
+def _trajectory_point(value: Any) -> np.ndarray:
+    point = np.asarray(value, dtype=np.float64)
+    if point.shape != (3,) or not np.isfinite(point).all():
+        raise ValueError("trajectory positions and handles must be finite [x, y, z] values")
+    return point
+
+
+def _bezier_point(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray,
+                  p3: np.ndarray, amount: float) -> np.ndarray:
+    inverse = 1.0 - amount
+    return (inverse ** 3) * p0 + 3.0 * (inverse ** 2) * amount * p1 \
+        + 3.0 * inverse * (amount ** 2) * p2 + (amount ** 3) * p3
+
+
+def _bezier_tangent(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray,
+                    p3: np.ndarray, amount: float) -> np.ndarray:
+    inverse = 1.0 - amount
+    return (3.0 * inverse * inverse) * (p1 - p0) \
+        + (6.0 * inverse * amount) * (p2 - p1) \
+        + (3.0 * amount * amount) * (p3 - p2)
+
+
+def plan_bezier_trajectory(root_motion: np.ndarray, trajectory: Mapping[str, Any],
+                           samples_per_segment: int = 80,
+                           heading_mode: str = "tangent",
+                           contacts: Mapping[str, Sequence[bool]] | None = None,
+                           foot_positions: Mapping[str, np.ndarray] | None = None) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Map gait-distance progress onto a linear or cubic Bezier path.
+
+    Each waypoint uses relative ``in_handle``/``out_handle`` vectors. The
+    fitted gait's cumulative distance controls timing, so footfalls and pelvis
+    wobble keep their captured pace while the parent follows the programmed
+    path. ``rotation_y`` is the absolute parent-space tangent heading; the wire
+    protocol also carries the tangent as a direction vector so Godot can align
+    the character without assuming its authored scene yaw.
+    """
+    raw = np.asarray(root_motion, dtype=np.float64)
+    trajectory_type = str(trajectory.get("type", "bezier")).lower()
+    if trajectory_type not in {"bezier", "linear"}:
+        raise ValueError("trajectory type must be 'bezier' or 'linear'")
+    waypoints = trajectory.get("waypoints")
+    if not isinstance(waypoints, list) or len(waypoints) < 2:
+        raise ValueError("trajectory requires at least two waypoints")
+    points: list[np.ndarray] = []
+    ins: list[np.ndarray] = []
+    outs: list[np.ndarray] = []
+    for item in waypoints:
+        if not isinstance(item, Mapping) or "position" not in item:
+            raise ValueError("each trajectory waypoint needs a position")
+        points.append(_trajectory_point(item["position"]))
+        ins.append(_trajectory_point(item.get("in_handle", [0.0, 0.0, 0.0])))
+        outs.append(_trajectory_point(item.get("out_handle", [0.0, 0.0, 0.0])))
+    samples = max(8, int(samples_per_segment))
+    path: list[np.ndarray] = []
+    tangent: list[np.ndarray] = []
+    for segment in range(len(points) - 1):
+        for sample in range(samples + (1 if segment == len(points) - 2 else 0)):
+            amount = sample / float(samples)
+            p0, p3 = points[segment], points[segment + 1]
+            if trajectory_type == "linear":
+                path.append(p0 * (1.0 - amount) + p3 * amount)
+                tangent.append(p3 - p0)
+            else:
+                p1, p2 = p0 + outs[segment], p3 + ins[segment + 1]
+                path.append(_bezier_point(p0, p1, p2, p3, amount))
+                tangent.append(_bezier_tangent(p0, p1, p2, p3, amount))
+    path_array = np.asarray(path)
+    tangent_array = np.asarray(tangent)
+    arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(path_array, axis=0), axis=1))))
+    total_length = float(arc[-1])
+    if total_length < 1e-8:
+        raise ValueError("trajectory waypoints produce a zero-length path")
+    # Measure directed progress, not total pelvis variation. Summing the length
+    # of every frame-to-frame displacement turns lateral hip sway and planted-
+    # foot corrections into fictitious forward speed, causing severe sliding.
+    horizontal = raw[:, [0, 2]] - raw[0, [0, 2]]
+    net = horizontal[-1]
+    if np.linalg.norm(net) > 1e-6:
+        travel_axis = net / np.linalg.norm(net)
+    else:
+        centered = horizontal - np.mean(horizontal, axis=0)
+        _, _, principal = np.linalg.svd(centered, full_matrices=False)
+        travel_axis = principal[0]
+        if np.dot(horizontal[-1] - horizontal[0], travel_axis) < 0.0:
+            travel_axis = -travel_axis
+    signed_progress = horizontal @ travel_axis
+    signed_progress -= signed_progress[0]
+    # Keep small backward corrections: they are produced by planted-foot
+    # locking and are necessary to counter the posed leg's local movement.
+    # Only prevent travel before the authored start of the path.
+    gait_arc = np.maximum.accumulate(np.maximum(signed_progress, 0.0))
+    distance_mode = str(trajectory.get("distance_mode", "gait")).lower()
+    speed_profile = str(trajectory.get("speed_profile", "captured")).lower()
+    if speed_profile not in {"captured", "constant"}:
+        raise ValueError("trajectory speed_profile must be 'captured' or 'constant'")
+    pace_scale = float(trajectory.get("pace_scale", 1.0))
+    if not math.isfinite(pace_scale) or pace_scale <= 0.0:
+        raise ValueError("trajectory pace_scale must be positive")
+    if distance_mode == "fit":
+        progress = (
+            np.linspace(0.0, 1.0, len(gait_arc), dtype=np.float64)
+            if speed_profile == "constant" else
+            gait_arc / max(1e-8, float(gait_arc[-1]))
+        )
+        path_distances = progress * total_length
+    elif distance_mode == "gait":
+        # Preserve captured stride distance and cadence. A longer path is only
+        # traversed part-way; forcing its endpoint rescales speed and slides feet.
+        path_distances = np.minimum(gait_arc * pace_scale, total_length)
+    else:
+        raise ValueError("trajectory distance_mode must be 'gait' or 'fit'")
+    contact_correction = min(1.0, max(0.0, float(trajectory.get("contact_correction", 0.9))))
+    local_forward = _trajectory_point(trajectory.get("local_forward", [0.0, 0.0, -1.0]))
+    if np.linalg.norm(local_forward[[0, 2]]) <= 1e-8:
+        raise ValueError("trajectory local_forward must have a horizontal component")
+    local_forward_angle = math.atan2(float(local_forward[0]), float(local_forward[2]))
+
+    def sample_path(distance: float) -> tuple[np.ndarray, np.ndarray, float]:
+        right = int(np.searchsorted(arc, distance, side="right"))
+        right = min(max(right, 1), len(arc) - 1)
+        left = right - 1
+        amount = (distance - arc[left]) / max(1e-8, arc[right] - arc[left])
+        point = path_array[left] * (1.0 - amount) + path_array[right] * amount
+        direction = tangent_array[left] * (1.0 - amount) + tangent_array[right] * amount
+        if np.linalg.norm(direction) <= 1e-8:
+            direction = tangent_array[right] if np.linalg.norm(tangent_array[right]) > 1e-8 else tangent_array[left]
+        heading = math.atan2(float(direction[0]), float(direction[2])) \
+            if np.linalg.norm(direction[[0, 2]]) > 1e-8 else 0.0
+        return point, direction, heading
+
+    # Solve the final avatar's own planted feet against distance on the path.
+    # This happens after retargeting because NLF feet and target-rig feet do not
+    # have identical lengths or bone rolls. Correction is tangent-only, keeping
+    # the root on the authored curve rather than introducing a lateral offset.
+    corrected_distances = path_distances.copy()
+    fit_endpoint_correction = 0.0
+    if contacts is not None and foot_positions is not None and contact_correction > 0.0:
+        anchors: dict[str, np.ndarray | None] = {"left": None, "right": None}
+        previous = {"left": False, "right": False}
+        for index in range(len(corrected_distances)):
+            # Carry the accumulated contact correction across support-foot
+            # changes. Starting each new stance from the uncorrected camera-
+            # relative pelvis distance makes a tracked subject walk in place.
+            if index == 0:
+                distance = float(path_distances[index])
+            else:
+                nominal_delta = float(path_distances[index] - path_distances[index - 1])
+                distance = float(corrected_distances[index - 1]) + nominal_delta
+            point, direction, heading = sample_path(distance)
+            candidates: list[float] = []
+            for side in ("left", "right"):
+                active = bool(contacts.get(side, [False] * len(corrected_distances))[index])
+                positions_for_side = foot_positions.get(side)
+                if positions_for_side is None:
+                    continue
+                foot = np.asarray(positions_for_side[index], dtype=np.float64)
+                # Match PoseStream's heading rule: rotate the avatar's declared
+                # local forward axis onto the curve tangent. The female proxy
+                # faces local -Z, so using heading directly would evaluate its
+                # feet 180 degrees away from their actual Godot positions.
+                avatar_yaw = heading - local_forward_angle
+                cosine, sine = math.cos(avatar_yaw), math.sin(avatar_yaw)
+                rotated = np.array([
+                    cosine * foot[0] + sine * foot[2],
+                    foot[1],
+                    -sine * foot[0] + cosine * foot[2],
+                ])
+                world_foot = point + rotated
+                if active and not previous[side]:
+                    anchors[side] = world_foot.copy()
+                if active and anchors[side] is not None:
+                    tangent_xz = direction[[0, 2]]
+                    tangent_length = np.linalg.norm(tangent_xz)
+                    if tangent_length > 1e-8:
+                        error_xz = (anchors[side] - world_foot)[[0, 2]]
+                        candidates.append(float(np.dot(error_xz, tangent_xz / tangent_length)))
+                if not active:
+                    anchors[side] = None
+                previous[side] = active
+            if candidates:
+                distance += contact_correction * float(np.mean(candidates))
+            corrected_distances[index] = min(total_length, max(0.0, distance))
+        if distance_mode == "fit" and len(corrected_distances) > 1:
+            # Contact locking may shorten total travel. Restore the authored
+            # endpoint mostly during swing frames; a small planted-frame weight
+            # avoids abrupt bursts when contact detection has long intervals.
+            fit_endpoint_correction = total_length - float(corrected_distances[-1])
+            weights = np.ones(len(corrected_distances) - 1, dtype=np.float64)
+            for index in range(1, len(corrected_distances)):
+                planted = any(bool(contacts.get(side, [False] * len(corrected_distances))[index])
+                              for side in ("left", "right"))
+                weights[index - 1] = 0.15 if planted else 1.0
+            cumulative = np.concatenate(([0.0], np.cumsum(weights)))
+            if cumulative[-1] > 1e-8:
+                corrected_distances += fit_endpoint_correction * cumulative / cumulative[-1]
+                corrected_distances = np.clip(corrected_distances, 0.0, total_length)
+    path_distances = corrected_distances
+    planned = np.empty_like(raw)
+    headings = np.zeros(len(raw), dtype=np.float64)
+    for index, distance in enumerate(path_distances):
+        planned[index], _, headings[index] = sample_path(float(distance))
+    headings = np.unwrap(headings)
+    if heading_mode == "none":
+        headings.fill(0.0)
+    offset = planned - planned[0]
+    return offset, headings, {
+        "type": trajectory_type, "waypoint_count": len(points),
+        "path_length": total_length, "gait_distance": float(gait_arc[-1]),
+        "progress_method": "monotonic_directed_root+target_foot_contact",
+        "travel_distance": float(path_distances[-1]),
+        "distance_mode": distance_mode, "pace_scale": pace_scale,
+        "speed_profile": speed_profile,
+        "target_foot_contact_correction": contact_correction,
+        "fit_endpoint_correction": fit_endpoint_correction,
+        "path_completed": bool(path_distances[-1] >= total_length - 1e-6),
+        "heading_mode": heading_mode,
+    }
+
+
 def measure_segment_errors(target: Rig, local_pose: Mapping[str, np.ndarray],
                            nlf_names: list[str], positions: np.ndarray) -> dict[str, Any]:
     """Report angular FK-vs-NLF errors after temporal filtering."""
@@ -696,9 +1000,386 @@ def measure_segment_errors(target: Rig, local_pose: Mapping[str, np.ndarray],
     }
 
 
+def fk_bone_positions(rig: Rig, local_pose: Mapping[str, np.ndarray],
+                      bone_names: Sequence[str]) -> dict[str, np.ndarray]:
+    """Evaluate selected target-rig bone origins in character-local space."""
+    frame_count = len(next(iter(local_pose.values())))
+    requested = {name: rig.index[name] for name in bone_names if name in rig.index}
+    result = {name: np.zeros((frame_count, 3), dtype=np.float64) for name in requested}
+    for frame in range(frame_count):
+        positions: list[np.ndarray] = []
+        rotations: list[np.ndarray] = []
+        for index, name in enumerate(rig.names):
+            parent = int(rig.parents[index])
+            rotation = local_pose[name][frame]
+            if parent < 0:
+                position = rig.translations[index].copy()
+                global_rotation = rotation
+            else:
+                position = positions[parent] + rotate_vector(rotations[parent], rig.translations[index])
+                global_rotation = quat_multiply(rotations[parent], rotation)
+            positions.append(position)
+            rotations.append(global_rotation)
+        for name, bone_index in requested.items():
+            result[name][frame] = positions[bone_index]
+    return result
+
+
+def _fk_frame(rig: Rig, local_pose: Mapping[str, np.ndarray],
+              frame: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Evaluate one frame of target-rig FK in character-local space."""
+    positions: list[np.ndarray] = []
+    rotations: list[np.ndarray] = []
+    for index, name in enumerate(rig.names):
+        parent = int(rig.parents[index])
+        rotation = local_pose[name][frame]
+        if parent < 0:
+            position = rig.translations[index].copy()
+            global_rotation = rotation
+        else:
+            position = positions[parent] + rotate_vector(
+                rotations[parent], rig.translations[index]
+            )
+            global_rotation = quat_multiply(rotations[parent], rotation)
+        positions.append(position)
+        rotations.append(global_rotation)
+    return positions, rotations
+
+
+def _yaw_vector(vector: np.ndarray, angle: float) -> np.ndarray:
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return np.array([
+        cosine * vector[0] + sine * vector[2],
+        vector[1],
+        -sine * vector[0] + cosine * vector[2],
+    ], dtype=np.float64)
+
+
+def solve_planted_foot_ik(rig: Rig, local_pose: dict[str, np.ndarray],
+                          root_motion: np.ndarray, root_yaw: np.ndarray,
+                          contacts: Mapping[str, Sequence[bool]],
+                          local_forward: Sequence[float] = (0.0, 0.0, -1.0),
+                          strength: float = 1.0) -> dict[str, Any]:
+    """Pin support ankles in XZ with target-rig analytical two-bone IK.
+
+    Root motion must remain on the authored straight path, so it cannot cancel
+    lateral ankle drift. This pass instead rotates each thigh and shin toward a
+    world-space ankle anchor while retaining the current knee bend plane and the
+    fitted foot's global orientation. Vertical placement is deliberately left
+    to ``apply_ground_lock`` so the visible sole has one authoritative ground
+    correction.
+    """
+    blend = min(1.0, max(0.0, float(strength)))
+    frame_count = len(root_motion)
+    if blend <= 0.0 or frame_count == 0:
+        return {"enabled": False, "strength": blend, "solved_frames": 0,
+                "before_median_error": 0.0, "after_median_error": 0.0}
+    forward = _trajectory_point(local_forward)
+    local_forward_angle = math.atan2(float(forward[0]), float(forward[2]))
+    chains = {
+        "left": ("LeftUpperLeg", "LeftLowerLeg", "LeftFoot"),
+        "right": ("RightUpperLeg", "RightLowerLeg", "RightFoot"),
+    }
+    if any(name not in rig.index or name not in local_pose
+           for chain in chains.values() for name in chain):
+        return {"enabled": False, "strength": blend, "solved_frames": 0,
+                "reason": "target rig lacks a required leg bone",
+                "before_median_error": 0.0, "after_median_error": 0.0}
+
+    anchors: dict[str, np.ndarray | None] = {"left": None, "right": None}
+    previous = {"left": False, "right": False}
+    before_errors: list[float] = []
+    solved_frames = 0
+    for frame in range(frame_count):
+        yaw = float(root_yaw[frame]) - local_forward_angle
+        positions, rotations = _fk_frame(rig, local_pose, frame)
+        for side, (upper_name, lower_name, foot_name) in chains.items():
+            active = bool(contacts.get(side, [False] * frame_count)[frame])
+            foot_index = rig.index[foot_name]
+            current_world = np.asarray(root_motion[frame], dtype=np.float64) + _yaw_vector(
+                positions[foot_index], yaw
+            )
+            if active and not previous[side]:
+                anchors[side] = current_world.copy()
+            if not active:
+                anchors[side] = None
+                previous[side] = False
+                continue
+            anchor = anchors[side]
+            previous[side] = True
+            if anchor is None:
+                continue
+            before_errors.append(float(np.linalg.norm((current_world - anchor)[[0, 2]])))
+
+            desired = _yaw_vector(anchor - np.asarray(root_motion[frame]), -yaw)
+            desired[1] = positions[foot_index][1]
+            upper_index = rig.index[upper_name]
+            lower_index = rig.index[lower_name]
+            hip = positions[upper_index]
+            knee = positions[lower_index]
+            ankle = positions[foot_index]
+            thigh_length = float(np.linalg.norm(knee - hip))
+            shin_length = float(np.linalg.norm(ankle - knee))
+            max_reach = thigh_length + shin_length - 1e-6
+            horizontal_distance = float(np.linalg.norm((desired - hip)[[0, 2]]))
+            if horizontal_distance < max_reach:
+                vertical_limit = math.sqrt(max(0.0, max_reach * max_reach
+                                                - horizontal_distance * horizontal_distance))
+                vertical_delta = float(desired[1] - hip[1])
+                if abs(vertical_delta) > vertical_limit:
+                    desired[1] = hip[1] + math.copysign(vertical_limit, vertical_delta)
+            target_vector = desired - hip
+            target_distance = float(np.linalg.norm(target_vector))
+            if thigh_length <= 1e-8 or shin_length <= 1e-8 or target_distance <= 1e-8:
+                continue
+            reachable = min(max_reach,
+                            max(abs(thigh_length - shin_length) + 1e-6, target_distance))
+            direction = target_vector / target_distance
+            target = hip + direction * reachable
+            along = (thigh_length * thigh_length - shin_length * shin_length
+                     + reachable * reachable) / (2.0 * reachable)
+            bend_height = math.sqrt(max(0.0, thigh_length * thigh_length - along * along))
+            bend = knee - hip - direction * float(np.dot(knee - hip, direction))
+            if np.linalg.norm(bend) <= 1e-8:
+                bend = np.cross(direction, np.array([0.0, 0.0, 1.0]))
+                if np.linalg.norm(bend) <= 1e-8:
+                    bend = np.cross(direction, np.array([1.0, 0.0, 0.0]))
+            desired_knee = hip + direction * along + _normalized(bend) * bend_height
+
+            original_upper = local_pose[upper_name][frame].copy()
+            original_lower = local_pose[lower_name][frame].copy()
+            original_foot = local_pose[foot_name][frame].copy()
+            old_foot_global = rotations[foot_index].copy()
+            upper_parent = int(rig.parents[upper_index])
+            parent_global = (np.array([0.0, 0.0, 0.0, 1.0]) if upper_parent < 0
+                             else rotations[upper_parent])
+            solved_upper_global = quat_multiply(
+                quat_from_to(knee - hip, desired_knee - hip), rotations[upper_index]
+            )
+            solved_upper_local = quat_multiply(
+                quat_conjugate(parent_global), solved_upper_global
+            )
+            local_pose[upper_name][frame] = quat_slerp(
+                original_upper, solved_upper_local, blend
+            )
+            positions, rotations = _fk_frame(rig, local_pose, frame)
+            knee = positions[lower_index]
+            ankle = positions[foot_index]
+            solved_lower_global = quat_multiply(
+                quat_from_to(ankle - knee, target - knee), rotations[lower_index]
+            )
+            solved_lower_local = quat_multiply(
+                quat_conjugate(rotations[upper_index]), solved_lower_global
+            )
+            local_pose[lower_name][frame] = quat_slerp(
+                original_lower, solved_lower_local, blend
+            )
+            positions, rotations = _fk_frame(rig, local_pose, frame)
+            solved_foot_local = quat_multiply(
+                quat_conjugate(rotations[lower_index]), old_foot_global
+            )
+            local_pose[foot_name][frame] = quat_slerp(
+                original_foot, solved_foot_local, blend
+            )
+            positions, rotations = _fk_frame(rig, local_pose, frame)
+            solved_frames += 1
+
+    after_errors: list[float] = []
+    anchors = {"left": None, "right": None}
+    previous = {"left": False, "right": False}
+    for frame in range(frame_count):
+        yaw = float(root_yaw[frame]) - local_forward_angle
+        positions, _ = _fk_frame(rig, local_pose, frame)
+        for side, (_, _, foot_name) in chains.items():
+            active = bool(contacts.get(side, [False] * frame_count)[frame])
+            world = np.asarray(root_motion[frame]) + _yaw_vector(
+                positions[rig.index[foot_name]], yaw
+            )
+            if active and not previous[side]:
+                anchors[side] = world.copy()
+            if active and anchors[side] is not None:
+                after_errors.append(float(np.linalg.norm((world - anchors[side])[[0, 2]])))
+            if not active:
+                anchors[side] = None
+            previous[side] = active
+    return {
+        "enabled": True,
+        "strength": blend,
+        "solved_frames": solved_frames,
+        "before_median_error": float(np.median(before_errors)) if before_errors else 0.0,
+        "before_max_error": max(before_errors, default=0.0),
+        "after_median_error": float(np.median(after_errors)) if after_errors else 0.0,
+        "after_max_error": max(after_errors, default=0.0),
+    }
+
+
+def stabilize_torso_upright(rig: Rig, local_pose: dict[str, np.ndarray],
+                            max_tilt_degrees: float,
+                            strength: float = 1.0) -> dict[str, float]:
+    """Limit whole-torso lean while preserving the fitted leg orientations."""
+    required = ("Hips", "UpperChest", "LeftUpperLeg", "RightUpperLeg")
+    if any(name not in rig.index or name not in local_pose for name in required):
+        return {"applied_frames": 0.0, "max_tilt_degrees": float(max_tilt_degrees)}
+    limit = math.radians(max(0.0, float(max_tilt_degrees)))
+    blend = min(1.0, max(0.0, float(strength)))
+    identity = np.array([0.0, 0.0, 0.0, 1.0])
+    hips_index = rig.index["Hips"]
+    chest_index = rig.index["UpperChest"]
+    leg_indices = [rig.index["LeftUpperLeg"], rig.index["RightUpperLeg"]]
+    applied = 0
+    before_values: list[float] = []
+    after_values: list[float] = []
+    frame_count = len(local_pose["Hips"])
+    for frame in range(frame_count):
+        positions: list[np.ndarray] = []
+        globals_at_frame: list[np.ndarray] = []
+        for index, name in enumerate(rig.names):
+            parent = int(rig.parents[index])
+            rotation = local_pose[name][frame]
+            if parent < 0:
+                position = rig.translations[index].copy()
+                global_rotation = rotation
+            else:
+                position = positions[parent] + rotate_vector(
+                    globals_at_frame[parent], rig.translations[index]
+                )
+                global_rotation = quat_multiply(globals_at_frame[parent], rotation)
+            positions.append(position)
+            globals_at_frame.append(global_rotation)
+        trunk = positions[chest_index] - positions[hips_index]
+        length = float(np.linalg.norm(trunk))
+        if length <= 1e-8:
+            continue
+        direction = trunk / length
+        tilt = math.acos(min(1.0, max(-1.0, float(direction[1]))))
+        before_values.append(math.degrees(tilt))
+        if tilt <= limit or blend <= 0.0:
+            after_values.append(math.degrees(tilt))
+            continue
+        horizontal = direction.copy()
+        horizontal[1] = 0.0
+        horizontal_length = float(np.linalg.norm(horizontal))
+        if horizontal_length <= 1e-8:
+            after_values.append(math.degrees(tilt))
+            continue
+        horizontal /= horizontal_length
+        desired = horizontal * math.sin(limit)
+        desired[1] = math.cos(limit)
+        correction = quat_slerp(identity, quat_from_to(direction, desired), blend)
+        old_leg_globals = [globals_at_frame[index].copy() for index in leg_indices]
+        hips_parent = int(rig.parents[hips_index])
+        new_hips_global = quat_multiply(correction, globals_at_frame[hips_index])
+        local_pose["Hips"][frame] = (
+            new_hips_global if hips_parent < 0 else
+            quat_multiply(quat_conjugate(globals_at_frame[hips_parent]), new_hips_global)
+        )
+        for leg_index, old_global in zip(leg_indices, old_leg_globals):
+            local_pose[rig.names[leg_index]][frame] = quat_multiply(
+                quat_conjugate(new_hips_global), old_global
+            )
+        applied += 1
+        after_values.append(math.degrees(limit + (tilt - limit) * (1.0 - blend)))
+    return {
+        "applied_frames": float(applied),
+        "max_tilt_degrees": float(max_tilt_degrees),
+        "strength": blend,
+        "before_median_degrees": float(np.median(before_values)) if before_values else 0.0,
+        "before_max_degrees": max(before_values, default=0.0),
+        "after_max_degrees": max(after_values, default=0.0),
+    }
+
+
+def limit_head_upward_pitch(rig: Rig, local_pose: dict[str, np.ndarray],
+                            max_up_degrees: float,
+                            forward_axis: Sequence[float] = (0.0, 0.0, 1.0)) -> dict[str, float]:
+    """Prevent a monocular head anchor from making the avatar stare skyward."""
+    if "Head" not in rig.index or "Head" not in local_pose:
+        return {"applied_frames": 0.0, "max_up_degrees": float(max_up_degrees)}
+    local_forward = _trajectory_point(forward_axis)
+    local_forward /= max(1e-8, float(np.linalg.norm(local_forward)))
+    limit = math.radians(float(max_up_degrees))
+    head_index = rig.index["Head"]
+    parent_index = int(rig.parents[head_index])
+    applied = 0
+    before: list[float] = []
+    after: list[float] = []
+    for frame in range(len(local_pose["Head"])):
+        globals_at_frame: list[np.ndarray] = []
+        for index, name in enumerate(rig.names):
+            parent = int(rig.parents[index])
+            rotation = local_pose[name][frame]
+            globals_at_frame.append(
+                rotation if parent < 0 else quat_multiply(globals_at_frame[parent], rotation)
+            )
+        head_global = globals_at_frame[head_index]
+        forward = rotate_vector(head_global, local_forward)
+        forward /= max(1e-8, float(np.linalg.norm(forward)))
+        pitch = math.asin(min(1.0, max(-1.0, float(forward[1]))))
+        before.append(math.degrees(pitch))
+        if pitch <= limit:
+            after.append(math.degrees(pitch))
+            continue
+        horizontal = forward.copy()
+        horizontal[1] = 0.0
+        horizontal /= max(1e-8, float(np.linalg.norm(horizontal)))
+        desired = horizontal * math.cos(limit)
+        desired[1] = math.sin(limit)
+        new_global = quat_multiply(quat_from_to(forward, desired), head_global)
+        local_pose["Head"][frame] = (
+            new_global if parent_index < 0 else
+            quat_multiply(quat_conjugate(globals_at_frame[parent_index]), new_global)
+        )
+        applied += 1
+        after.append(float(max_up_degrees))
+    return {
+        "applied_frames": float(applied),
+        "max_up_degrees": float(max_up_degrees),
+        "before_median_degrees": float(np.median(before)) if before else 0.0,
+        "before_max_degrees": max(before, default=0.0),
+        "after_max_degrees": max(after, default=0.0),
+    }
+
+
+def apply_ground_lock(root_motion: np.ndarray,
+                      foot_positions: Mapping[str, np.ndarray],
+                      contacts: Mapping[str, Sequence[bool]],
+                      skeleton_origin_y: float = 0.0,
+                      clearance: float = 0.0) -> tuple[np.ndarray, dict[str, float]]:
+    """Keep the target rig's lowest support sole on the trajectory ground."""
+    result = np.asarray(root_motion, dtype=np.float64).copy()
+    frame_count = len(result)
+    offsets = np.zeros(frame_count, dtype=np.float64)
+    for frame in range(frame_count):
+        active = [side for side in ("left", "right")
+                  if bool(contacts.get(side, [False] * frame_count)[frame])]
+        if not active:
+            active = ["left", "right"]
+        sole_heights: list[float] = []
+        for side in active:
+            for suffix in ("foot", "toes"):
+                values = foot_positions.get(f"{side}_{suffix}")
+                if values is not None:
+                    sole_heights.append(float(values[frame, 1]))
+        offsets[frame] = (float(clearance) - float(skeleton_origin_y)
+                          - min(sole_heights, default=0.0))
+    # Bone rotations are already temporally filtered. A second vertical median
+    # would leave the support sole visibly above ground at contact transitions.
+    result[:, 1] += offsets
+    return result, {
+        "skeleton_origin_y": float(skeleton_origin_y),
+        "clearance": float(clearance),
+        "offset_min": float(offsets.min(initial=0.0)),
+        "offset_max": float(offsets.max(initial=0.0)),
+    }
+
+
 def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
                  sam_observations: Mapping[str, Any], frame_count: int,
-                 fps: float, nlf_weight: float) -> tuple[list[dict[str, list[float]]], dict[str, Any]]:
+                 fps: float, nlf_weight: float, root_motion_mode: str = "foot-contact",
+                 foot_lock_strength: float = 0.85, root_motion_scale: float | None = None,
+                 trajectory: Mapping[str, Any] | None = None,
+                 trajectory_samples: int = 80, trajectory_heading: str = "tangent") -> tuple[
+                     list[dict[str, list[float]]], dict[str, Any], dict[str, Any]]:
     nlf_names, positions, uncertainties = resample_nlf(nlf_observations, frame_count)
     base_globals = retarget_sam_anchors(
         target, source, sam_observations["records"], sam_observations["anchor_indices"], frame_count,
@@ -707,6 +1388,12 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
         target, base_globals, nlf_names, positions, uncertainties, nlf_weight,
     )
     contacts = infer_foot_contacts(nlf_names, positions, fps)
+    root_motion, root_diagnostics = infer_root_motion(
+        target, nlf_names, positions, contacts, fps,
+        root_motion_mode, foot_lock_strength, root_motion_scale,
+    )
+    root_yaw = np.zeros(frame_count, dtype=np.float64)
+    trajectory_diagnostics: dict[str, Any] | None = None
     filtered: dict[str, np.ndarray] = {}
     for name, quaternions in local.items():
         responsiveness = 0.44
@@ -727,6 +1414,55 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
                 filtered[bone_name][frame] = quat_slerp(
                     filtered[bone_name][frame - 1], filtered[bone_name][frame], 0.28,
                 )
+    torso_diagnostics: dict[str, float] | None = None
+    if trajectory is not None and "max_torso_tilt_degrees" in trajectory:
+        torso_diagnostics = stabilize_torso_upright(
+            target, filtered,
+            float(trajectory.get("max_torso_tilt_degrees", 8.0)),
+            float(trajectory.get("torso_upright_strength", 1.0)),
+        )
+    head_diagnostics: dict[str, float] | None = None
+    if trajectory is not None and "max_head_up_degrees" in trajectory:
+        head_diagnostics = limit_head_upward_pitch(
+            target, filtered,
+            float(trajectory.get("max_head_up_degrees", 4.0)),
+            trajectory.get("head_forward_axis", [0.0, 0.0, 1.0]),
+        )
+    ground_diagnostics: dict[str, float] | None = None
+    foot_ik_diagnostics: dict[str, Any] | None = None
+    if trajectory is not None:
+        target_feet = fk_bone_positions(
+            target, filtered, ("LeftFoot", "LeftToes", "RightFoot", "RightToes")
+        )
+        root_motion, root_yaw, trajectory_diagnostics = plan_bezier_trajectory(
+            root_motion, trajectory, trajectory_samples, trajectory_heading,
+            contacts,
+            {"left": target_feet.get("LeftFoot"), "right": target_feet.get("RightFoot")},
+        )
+        if bool(trajectory.get("foot_ik", False)):
+            foot_ik_diagnostics = solve_planted_foot_ik(
+                target, filtered, root_motion, root_yaw, contacts,
+                trajectory.get("local_forward", [0.0, 0.0, -1.0]),
+                float(trajectory.get("foot_ik_strength", 1.0)),
+            )
+            # IK changed the target-rig leg transforms. Grounding must use the
+            # corrected foot and toe locations, not the pre-IK FK snapshot.
+            target_feet = fk_bone_positions(
+                target, filtered, ("LeftFoot", "LeftToes", "RightFoot", "RightToes")
+            )
+        if bool(trajectory.get("ground_lock", False)):
+            root_motion, ground_diagnostics = apply_ground_lock(
+                root_motion,
+                {
+                    "left_foot": target_feet.get("LeftFoot"),
+                    "left_toes": target_feet.get("LeftToes"),
+                    "right_foot": target_feet.get("RightFoot"),
+                    "right_toes": target_feet.get("RightToes"),
+                },
+                contacts,
+                float(trajectory.get("skeleton_origin_y", 0.0)),
+                float(trajectory.get("ground_clearance", 0.0)),
+            )
     segment_errors = measure_segment_errors(target, filtered, nlf_names, positions)
     frames: list[dict[str, list[float]]] = []
     for frame in range(frame_count):
@@ -741,14 +1477,44 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
         "post_filter_segment_error": segment_errors,
         "driven_bones": sorted(driven_bones),
         "rest_bones": [name for name in target.names if name not in driven_bones],
+        "root_motion": root_diagnostics,
+        "trajectory": trajectory_diagnostics,
+        "torso_upright": torso_diagnostics,
+        "head_pitch_limit": head_diagnostics,
+        "planted_foot_ik": foot_ik_diagnostics,
+        "ground_lock": ground_diagnostics,
     }
-    return frames, diagnostics
+    root_data = {
+        "positions": [[round(float(value), 8) for value in root_motion[frame]]
+                      for frame in range(frame_count)],
+        "rotation_y": [round(float(value), 8) for value in root_yaw],
+        "heading_directions": (
+            [[round(float(math.sin(value)), 8), 0.0, round(float(math.cos(value)), 8)]
+             for value in root_yaw]
+            if trajectory is not None and trajectory_heading == "tangent" else []
+        ),
+        "local_forward": (
+            [float(value) for value in trajectory.get("local_forward", [0.0, 0.0, -1.0])]
+            if trajectory is not None else [0.0, 0.0, -1.0]
+        ),
+        "upright_root": bool(trajectory.get("upright_root", False)) if trajectory is not None else False,
+        "scene_origin_node": (
+            str(trajectory.get("scene_origin_node", "")) if trajectory is not None else ""
+        ),
+        "ground_y": (
+            float(trajectory.get("ground_y", 0.0))
+            if trajectory is not None and "ground_y" in trajectory else None
+        ),
+        "contacts": contacts,
+    }
+    return frames, diagnostics, root_data
 
 
 def make_pose_frame(frame_quaternions: Mapping[str, Sequence[float]], seq: int,
                     character_path: str, skeleton_path: str, controls_path: str,
-                    source_video: str, reset_to_rest: bool, ack: bool = False) -> dict[str, Any]:
-    return {
+                    source_video: str, reset_to_rest: bool, ack: bool = False,
+                    root_motion: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    message: dict[str, Any] = {
         "protocol": PROTOCOL_NAME,
         "version": PROTOCOL_VERSION,
         "type": "pose.frame",
@@ -775,6 +1541,29 @@ def make_pose_frame(frame_quaternions: Mapping[str, Sequence[float]], seq: int,
             },
         },
     }
+    if root_motion is not None:
+        message["pose"]["root_motion"] = {
+            "position": [float(item) for item in root_motion.get("position", [0.0, 0.0, 0.0])],
+            "rotation_y": float(root_motion.get("rotation_y", 0.0)),
+            "space": "character_parent",
+        }
+        if "heading_direction" in root_motion:
+            message["pose"]["root_motion"]["heading_direction"] = [
+                float(item) for item in root_motion["heading_direction"]
+            ]
+            message["pose"]["root_motion"]["local_forward"] = [
+                float(item) for item in root_motion.get("local_forward", [0.0, 0.0, -1.0])
+            ]
+            message["pose"]["root_motion"]["upright_root"] = bool(
+                root_motion.get("upright_root", False)
+            )
+        if root_motion.get("scene_origin_node"):
+            message["pose"]["root_motion"]["scene_origin_node"] = str(
+                root_motion["scene_origin_node"]
+            )
+        if root_motion.get("ground_y") is not None:
+            message["pose"]["root_motion"]["ground_y"] = float(root_motion["ground_y"])
+    return message
 
 
 def _read_line(sock: socket.socket, timeout: float = 2.0) -> dict[str, Any] | None:
@@ -800,6 +1589,14 @@ def stream_motion(motion: Mapping[str, Any], host: str, port: int, loop: bool,
     frames = motion["frames"]
     fps = float(motion["fps"])
     source_video = str(motion["source_video"])
+    root_data = motion.get("root_motion", {})
+    root_positions = root_data.get("positions", []) if isinstance(root_data, Mapping) else []
+    root_yaw = root_data.get("rotation_y", []) if isinstance(root_data, Mapping) else []
+    heading_directions = root_data.get("heading_directions", []) if isinstance(root_data, Mapping) else []
+    local_forward = root_data.get("local_forward", [0.0, 0.0, -1.0]) if isinstance(root_data, Mapping) else [0.0, 0.0, -1.0]
+    upright_root = bool(root_data.get("upright_root", False)) if isinstance(root_data, Mapping) else False
+    scene_origin_node = str(root_data.get("scene_origin_node", "")) if isinstance(root_data, Mapping) else ""
+    ground_y = root_data.get("ground_y") if isinstance(root_data, Mapping) else None
     with socket.create_connection((host, port), timeout=3.0) as sock:
         hello = _read_line(sock)
         if not hello or hello.get("type") != "hello":
@@ -811,7 +1608,23 @@ def stream_motion(motion: Mapping[str, Any], host: str, port: int, loop: bool,
             for index, quaternions in enumerate(frames):
                 message = make_pose_frame(
                     quaternions, seq, character_path, skeleton_path, controls_path,
-                    source_video, reset_to_rest=(seq == 0), ack=(index == len(frames) - 1 and not loop),
+                    source_video, reset_to_rest=(index == 0),
+                    ack=(index == len(frames) - 1 and not loop),
+                    root_motion=(
+                        {
+                            "position": root_positions[index],
+                            "rotation_y": root_yaw[index],
+                            **({
+                                "heading_direction": heading_directions[index],
+                                "local_forward": local_forward,
+                                "upright_root": upright_root,
+                            } if len(heading_directions) == len(frames) else {}),
+                            **({"scene_origin_node": scene_origin_node} if scene_origin_node else {}),
+                            **({"ground_y": float(ground_y)} if ground_y is not None else {}),
+                        }
+                        if len(root_positions) == len(frames) and len(root_yaw) == len(frames)
+                        else None
+                    ),
                 )
                 sock.sendall(json.dumps(message, separators=(",", ":")).encode("utf-8") + b"\n")
                 seq += 1
@@ -842,6 +1655,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nlf-device", default="mps")
     parser.add_argument("--nlf-batch-size", type=int, default=8)
     parser.add_argument("--nlf-weight", type=float, default=1.0)
+    parser.add_argument("--root-motion", choices=("off", "pelvis", "foot-contact"),
+                        default="foot-contact",
+                        help="parent translation source; foot-contact locks planted feet while preserving Hips wobble")
+    parser.add_argument("--foot-lock-strength", type=float, default=0.85,
+                        help="blend from raw pelvis displacement to planted-foot root correction")
+    parser.add_argument("--root-motion-scale", type=float,
+                        help="override automatic NLF-to-target scene-unit scale")
+    parser.add_argument("--trajectory", type=Path,
+                        help="JSON cubic-Bezier waypoint program; gait distance controls path timing")
+    parser.add_argument("--trajectory-samples", type=int, default=80,
+                        help="arc-length samples per Bezier segment")
+    parser.add_argument("--trajectory-heading", choices=("tangent", "none"), default="tangent",
+                        help="rotate the character by the trajectory tangent or keep its initial heading")
     parser.add_argument("--sam3d-repo", type=Path, default=project / "sam3d/sam-3d-body-repo")
     parser.add_argument("--sam3d-checkpoint", type=Path,
                         default=project / "sam3d/sam-3d-body-vith/model.ckpt")
@@ -882,6 +1708,12 @@ def validate_paths(args: argparse.Namespace) -> None:
             raise RuntimeError(f"{label} does not exist: {path}")
     if args.duration <= 0 or args.fps <= 0 or args.nlf_fps <= 0 or args.sam3d_fps <= 0:
         raise RuntimeError("duration and frame rates must be positive")
+    if not 0.0 <= args.foot_lock_strength <= 1.0:
+        raise RuntimeError("--foot-lock-strength must be between 0 and 1")
+    if args.root_motion_scale is not None and args.root_motion_scale <= 0.0:
+        raise RuntimeError("--root-motion-scale must be positive")
+    if args.trajectory is not None and not args.trajectory.is_file():
+        raise RuntimeError(f"trajectory file does not exist: {args.trajectory}")
 
 
 def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
@@ -941,9 +1773,12 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
     source = load_mhr_rig(args.mhr_model)
     if len(target.names) != 56:
         raise RuntimeError(f"expected the female target to contain 56 bones, found {len(target.names)}")
-    frame_data, diagnostics = solve_motion(
+    frame_data, diagnostics, root_motion = solve_motion(
         target, source, observations["nlf"], observations["sam3d"], frame_count,
-        args.fps, args.nlf_weight,
+        args.fps, args.nlf_weight, args.root_motion, args.foot_lock_strength,
+        args.root_motion_scale,
+        json.loads(args.trajectory.read_text(encoding="utf-8")) if args.trajectory else None,
+        args.trajectory_samples, args.trajectory_heading,
     )
     motion = {
         "schema": "godot-pose-motion-cache",
@@ -964,6 +1799,7 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
             "nlf_weight": args.nlf_weight,
         },
         "diagnostics": diagnostics,
+        "root_motion": root_motion,
         "frames": frame_data,
     }
     output_path = args.output_dir / "motion_pose_frames.json"

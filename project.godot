@@ -26,7 +26,7 @@ window/size/mode=2
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/ots_render_capture/plugin.cfg", "res://addons/quick_fk_bones/plugin.cfg")
+enabled=PackedStringArray("res://addons/ots_render_capture/plugin.cfg", "res://addons/quick_fk_bones/plugin.cfg", "res://addons/trajectory_author/plugin.cfg")
 
 [file_customization]
 

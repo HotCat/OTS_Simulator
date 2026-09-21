@@ -14,6 +14,30 @@ const DEFAULT_PORT := 7007
 const MAX_CLIENTS := 8
 const MAX_BUFFER_BYTES := 4 * 1024 * 1024
 const MAX_MESSAGE_BYTES := 2 * 1024 * 1024
+const CAMERA_SERVICE_GROUP := &"ots_render_capture_service"
+const DEFAULT_WALK_CONTROLLER_PATH := NodePath("FemaleWalkController")
+
+const CAMERA_CAPABILITIES: Array[String] = [
+	"camera.follow.confirm",
+	"camera.follow.stop",
+	"camera.view.set",
+	"camera.view.restore",
+	"camera.program.load",
+	"camera.program.play",
+	"camera.program.pause",
+	"camera.program.reset",
+	"camera.program.clear",
+	"camera.program.status",
+]
+
+const WALK_TRANSPORT_CAPABILITIES: Array[String] = [
+	"walk.play",
+	"walk.pause",
+	"walk.restart",
+	"walk.refresh_trajectory",
+	"walk.record_camera_motion",
+	"walk.status",
+]
 
 signal pose_applied(message: Dictionary, response: Dictionary)
 
@@ -27,6 +51,9 @@ var scene_root_provider: Callable
 var _server := TCPServer.new()
 var _clients: Array[Dictionary] = []
 var _pending_frames: Dictionary = {}
+var _root_motion_base_positions: Dictionary = {}
+var _root_motion_base_rotations: Dictionary = {}
+var _root_motion_origin_paths: Dictionary = {}
 var _listening := false
 
 func _ready() -> void:
@@ -73,11 +100,18 @@ func _accept_clients() -> void:
 			continue
 		peer.set_no_delay(true)
 		_clients.append({"peer": peer, "buffer": ""})
+		var capabilities: Array[String] = [
+			"pose.apply", "pose.capture", "pose.frame", "fk", "ik",
+			"hybrid", "quaternion", "euler_degrees",
+		]
+		if Engine.is_editor_hint():
+			capabilities.append_array(CAMERA_CAPABILITIES)
+			capabilities.append_array(WALK_TRANSPORT_CAPABILITIES)
 		_reply(peer, {
 			"protocol": PROTOCOL_NAME,
 			"version": PROTOCOL_VERSION,
 			"type": "hello",
-			"capabilities": ["pose.apply", "pose.capture", "pose.frame", "fk", "ik", "hybrid", "quaternion", "euler_degrees"],
+			"capabilities": capabilities,
 		})
 
 func _poll_clients() -> void:
@@ -144,7 +178,137 @@ func _handle_line(peer: StreamPeerTCP, line: String) -> void:
 		var capture_result := _capture_message(message)
 		_reply_with_request(peer, capture_result, message)
 		return
+	if message_type.begins_with("camera."):
+		var camera_result := _handle_camera_message(message_type, message)
+		_reply_with_request(peer, camera_result, message)
+		return
+	if message_type.begins_with("walk."):
+		var walk_result := _handle_walk_transport_message(message_type, message)
+		_reply_with_request(peer, walk_result, message)
+		return
 	_reply_with_request(peer, {"type": "error", "error": "unsupported_message_type"}, message)
+
+func _handle_walk_transport_message(message_type: String, message: Dictionary) -> Dictionary:
+	if not Engine.is_editor_hint():
+		return {"type": "error", "error": "walk_transport_editor_only"}
+	var scene := _pose_scene_root()
+	if scene == null:
+		return {"type": "error", "error": "edited_scene_missing"}
+	var controller_path := NodePath(str(message.get(
+		"controller_node", str(DEFAULT_WALK_CONTROLLER_PATH)
+	)))
+	var controller := scene.get_node_or_null(controller_path)
+	if controller == null:
+		return {
+			"type": "error",
+			"error": "walk_controller_not_found",
+			"controller_node": str(controller_path),
+		}
+	var method_name := ""
+	match message_type:
+		"walk.play": method_name = "editor_transport_play"
+		"walk.pause": method_name = "editor_transport_pause"
+		"walk.restart": method_name = "editor_transport_restart"
+		"walk.refresh_trajectory": method_name = "editor_transport_refresh_trajectory"
+		"walk.record_camera_motion": method_name = "editor_transport_record_camera_motion"
+		"walk.status": method_name = "editor_transport_status"
+		_:
+			return {"type": "error", "error": "unsupported_walk_message_type"}
+	if not controller.has_method(method_name):
+		return {
+			"type": "error",
+			"error": "walk_transport_method_unavailable",
+			"method": method_name,
+		}
+	var result: Dictionary
+	if message_type == "walk.record_camera_motion":
+		var options_value = message.get("options", {})
+		if not options_value is Dictionary:
+			return {"type": "error", "error": "walk_record_options_must_be_object"}
+		result = controller.call(method_name, options_value) as Dictionary
+	else:
+		result = controller.call(method_name) as Dictionary
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["controller_node"] = str(controller_path)
+	result["type"] = _walk_response_type(message_type)
+	return result
+
+func _walk_response_type(message_type: String) -> String:
+	match message_type:
+		"walk.play": return "walk.playing"
+		"walk.pause": return "walk.paused"
+		"walk.restart": return "walk.restarted"
+		"walk.refresh_trajectory": return "walk.trajectory_refreshed"
+		"walk.record_camera_motion": return "walk.camera_recording_toggled"
+		"walk.status": return "walk.status"
+		_: return "walk.response"
+
+func _handle_camera_message(message_type: String, message: Dictionary) -> Dictionary:
+	if not Engine.is_editor_hint():
+		return {"type": "error", "error": "camera_editor_only"}
+	var service := get_tree().get_first_node_in_group(CAMERA_SERVICE_GROUP)
+	if service == null:
+		return {"type": "error", "error": "camera_service_unavailable"}
+	var result: Dictionary
+	match message_type:
+		"camera.follow.confirm":
+			var options_value = message.get("options", {})
+			if not options_value is Dictionary:
+				return {"type": "error", "error": "camera_options_must_be_object"}
+			result = service.call("confirm_editor_camera_follow", options_value) as Dictionary
+		"camera.follow.stop":
+			result = service.call("stop_editor_camera_follow") as Dictionary
+		"camera.view.set":
+			var view_value = message.get("view")
+			if not view_value is Dictionary:
+				return {"type": "error", "error": "camera_view_missing"}
+			result = service.call("set_editor_camera_initial_view", view_value) as Dictionary
+		"camera.view.restore":
+			result = service.call("restore_editor_camera_initial_view") as Dictionary
+		"camera.program.load":
+			var program_value = message.get("program")
+			if not program_value is Dictionary:
+				return {"type": "error", "error": "camera_program_missing"}
+			result = service.call(
+				"load_editor_camera_program",
+				program_value,
+				bool(message.get("auto_play", true))
+			) as Dictionary
+		"camera.program.play":
+			result = service.call(
+				"play_editor_camera_program", bool(message.get("restart", false))
+			) as Dictionary
+		"camera.program.pause":
+			result = service.call("pause_editor_camera_program") as Dictionary
+		"camera.program.reset":
+			result = service.call("reset_editor_camera_program") as Dictionary
+		"camera.program.clear":
+			result = service.call("clear_editor_camera_program") as Dictionary
+		"camera.program.status":
+			result = service.call("editor_camera_program_status") as Dictionary
+		_:
+			return {"type": "error", "error": "unsupported_camera_message_type"}
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = _camera_response_type(message_type)
+	return result
+
+func _camera_response_type(message_type: String) -> String:
+	match message_type:
+		"camera.follow.confirm": return "camera.follow.confirmed"
+		"camera.follow.stop": return "camera.follow.stopped"
+		"camera.view.set": return "camera.view.set"
+		"camera.view.restore": return "camera.view.restored"
+		"camera.program.load": return "camera.program.loaded"
+		"camera.program.play": return "camera.program.playing"
+		"camera.program.pause": return "camera.program.paused"
+		"camera.program.reset": return "camera.program.reset"
+		"camera.program.clear": return "camera.program.cleared"
+		"camera.program.status": return "camera.program.status"
+		_: return "camera.response"
 
 func _apply_pending_frames() -> void:
 	if _pending_frames.is_empty():
@@ -186,6 +350,7 @@ func _apply_message(message: Dictionary) -> Dictionary:
 	_apply_character_transform(character, pose)
 	if bool(pose.get("reset_to_rest", true)):
 		skeleton.reset_bone_poses()
+	var root_motion_result := _apply_root_motion(character, message, pose)
 	var control_result := _apply_ik_controls(character, character_spec, pose)
 	var modifier_result := _apply_modifiers(skeleton, pose, mode)
 	# Hybrid poses combine target-driven IK with explicit FK overrides. Let IK
@@ -220,9 +385,59 @@ func _apply_message(message: Dictionary) -> Dictionary:
 		"control_names_missing": control_result.missing,
 		"modifiers_applied": modifier_result.applied,
 		"modifier_names_missing": modifier_result.missing,
+		"root_motion_applied": root_motion_result.applied,
+		"root_motion_space": root_motion_result.space,
+		"root_motion_origin": root_motion_result.get("origin", ""),
 		"seq": message.get("seq", null),
 		"timestamp_usec": Time.get_ticks_usec(),
 	}
+
+func _apply_root_motion(character: Node3D, message: Dictionary, pose: Dictionary) -> Dictionary:
+	var root_value = pose.get("root_motion", {})
+	if not root_value is Dictionary:
+		return {"applied": false, "space": ""}
+	var root_motion := root_value as Dictionary
+	var key := _character_key(message)
+	var origin_path := ""
+	if bool(pose.get("reset_to_rest", false)) or not _root_motion_base_positions.has(key):
+		var base_position := character.position
+		origin_path = str(root_motion.get("scene_origin_node", ""))
+		if not origin_path.is_empty():
+			var scene := _pose_scene_root()
+			var origin := scene.get_node_or_null(NodePath(origin_path)) as Node3D if scene != null else null
+			var character_parent := character.get_parent() as Node3D
+			if origin != null and character_parent != null:
+				base_position = character_parent.to_local(origin.global_position)
+		if root_motion.has("ground_y"):
+			base_position.y = float(root_motion.get("ground_y", base_position.y))
+		_root_motion_base_positions[key] = base_position
+		_root_motion_base_rotations[key] = character.quaternion
+		_root_motion_origin_paths[key] = origin_path
+	var offset := _vec3(root_motion.get("position"), Vector3.ZERO)
+	var space := str(root_motion.get("space", "character_parent"))
+	if space != "character_parent":
+		return {"applied": false, "space": space}
+	character.position = (_root_motion_base_positions[key] as Vector3) + offset
+	if root_motion.has("heading_direction"):
+		var desired_forward := _vec3(root_motion.get("heading_direction"), Vector3.FORWARD)
+		desired_forward.y = 0.0
+		var local_forward := _vec3(root_motion.get("local_forward"), Vector3.FORWARD)
+		local_forward.y = 0.0
+		var base_rotation := _root_motion_base_rotations[key] as Quaternion
+		var base_forward := base_rotation * local_forward
+		base_forward.y = 0.0
+		var upright_root := bool(root_motion.get("upright_root", false))
+		var current_forward := local_forward if upright_root else base_forward
+		if not desired_forward.is_zero_approx() and not current_forward.is_zero_approx():
+			desired_forward = desired_forward.normalized()
+			current_forward = current_forward.normalized()
+			var correction := current_forward.signed_angle_to(desired_forward, Vector3.UP)
+			var starting_rotation := Quaternion.IDENTITY if upright_root else base_rotation
+			character.quaternion = (Quaternion(Vector3.UP, correction) * starting_rotation).normalized()
+	elif root_motion.has("rotation_y"):
+		var delta := Quaternion(Vector3.UP, float(root_motion.get("rotation_y", 0.0)))
+		character.quaternion = ((_root_motion_base_rotations[key] as Quaternion) * delta).normalized()
+	return {"applied": true, "space": space, "origin": str(_root_motion_origin_paths.get(key, ""))}
 
 func _capture_message(message: Dictionary) -> Dictionary:
 	var character_spec_value = message.get("character", {})
@@ -306,11 +521,7 @@ func _node_transform_data(node: Node3D) -> Dictionary:
 	}
 
 func _find_character(character_spec: Dictionary) -> Node3D:
-	var scene: Node = null
-	if scene_root_provider.is_valid():
-		scene = scene_root_provider.call() as Node
-	else:
-		scene = get_tree().current_scene
+	var scene := _pose_scene_root()
 	if scene == null:
 		return null
 	var path_string := str(character_spec.get("node_path", "IK_character"))
@@ -318,6 +529,14 @@ func _find_character(character_spec: Dictionary) -> Node3D:
 	if character == null and str(scene.name) == path_string:
 		character = scene as Node3D
 	return character
+
+func _pose_scene_root() -> Node:
+	var scene: Node = null
+	if scene_root_provider.is_valid():
+		scene = scene_root_provider.call() as Node
+	else:
+		scene = get_tree().current_scene
+	return scene
 
 func _character_key(message: Dictionary) -> String:
 	var spec_value = message.get("character", {})

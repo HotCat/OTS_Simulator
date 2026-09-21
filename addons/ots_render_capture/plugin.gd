@@ -1,6 +1,12 @@
 @tool
 extends EditorPlugin
 
+signal editor_camera_video_state_changed(active: bool, status: String)
+signal editor_camera_follow_state_changed(active: bool, status: String)
+signal editor_camera_program_state_changed(state: String, status: String)
+
+const CameraMotionProgram = preload("res://scripts/editor_camera_motion_program.gd")
+
 ## Captures the current 3D editor view without requiring a Camera3D node in
 ## the saved scene.  An isolated duplicate of the edited scene prevents editor
 ## gizmos, selection outlines, and camera icons from leaking into the exported
@@ -9,7 +15,9 @@ extends EditorPlugin
 
 const FEMALE_PATH := NodePath("IK_character")
 const MALE_PATH := NodePath("MaleCarrier")
+const CAMERA_REFERENCE_NAME := "CameraOrbitReference"
 const OUTPUT_ROOT := "res://renders/ots_quickview"
+const CAPTURE_SERVICE_GROUP := &"ots_render_capture_service"
 
 # The color-reference pass is intentionally different from the binary ID mask:
 # it keeps the whole scene and normal 3D shading in one coherent image while
@@ -26,11 +34,14 @@ const RESOLUTIONS: Array[Vector2i] = [
 ]
 const VIDEO_FRAME_RATES: Array[int] = [12, 24, 30]
 
-var _dock: VBoxContainer
+var _dock: ScrollContainer
+var _dock_content: VBoxContainer
 var _viewport_choice: OptionButton
 var _resolution_choice: OptionButton
 var _capture_button: Button
 var _video_duration: SpinBox
+var _use_camera_program_duration: CheckButton
+var _video_program_end_padding: SpinBox
 var _video_fps_choice: OptionButton
 var _video_start_delay: SpinBox
 var _keep_video_frames: CheckButton
@@ -43,11 +54,46 @@ var _capture_scheduled := false
 var _video_recording := false
 var _video_capture_scheduled := false
 var _video_cancel_requested := false
+var _recording_walk_controller: Node
+var _recording_walk_was_playing := false
+var _recording_fixed_step_active := false
+var _recording_camera_program_was_playing := false
+var _camera_follow_active := false
+var _camera_follow_character: Node3D
+var _camera_follow_target_path := FEMALE_PATH
+var _camera_follow_base_relative_transform := Transform3D.IDENTITY
+var _camera_follow_relative_transform := Transform3D.IDENTITY
+## Canonical, reproducible shot setup.  Keep the orientation as a quaternion;
+## Euler angles are only a calibration/readout convenience and can suffer from
+## gimbal singularities or multiple equivalent representations.
+var _camera_initial_view_relative_transform := Transform3D.IDENTITY
+var _camera_initial_view_valid := false
+var _camera_follow_viewport_index := 0
+var _camera_work_zero_valid := false
+var _camera_motion_program = CameraMotionProgram.new()
+var _camera_program_loaded := false
+var _camera_program_playing := false
+var _camera_program_elapsed := 0.0
+var _orbit_reference: Marker3D
+var _camera_coordinate_status: Label
+var _camera_coordinate_values: Label
+var _camera_orbit_status: Label
+var _camera_orbit_values: Label
+var _calibration_refresh_accumulator := 0.0
 
 
 func _enter_tree() -> void:
+	# Scene @tool controllers cannot hold a serialized reference to an
+	# EditorPlugin. Advertising this instance through a named editor-only group
+	# gives inspector transport buttons a stable, dependency-free bridge.
+	add_to_group(CAPTURE_SERVICE_GROUP)
+	process_priority = 100
+	set_process(true)
 	_build_dock()
-	add_control_to_dock(EditorPlugin.DOCK_SLOT_RIGHT_BL, _dock)
+	# Keep the director panel beside Inspector where it remains discoverable.
+	# The previous lower-right slot can collapse to zero height in saved editor
+	# layouts, making a technically active dock look as if it disappeared.
+	add_control_to_dock(EditorPlugin.DOCK_SLOT_RIGHT_UL, _dock)
 	# A menu command gives the capture a second, editor-native entry point. It is
 	# also useful when another editor plugin consumes a dock button's mouse-up
 	# event before Button.pressed can be emitted.
@@ -56,6 +102,9 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	_camera_follow_active = false
+	set_process(false)
+	remove_from_group(CAPTURE_SERVICE_GROUP)
 	remove_tool_menu_item("Capture OTS Render Passes")
 	remove_tool_menu_item("Record OTS Editor Camera Video")
 	if is_instance_valid(_dock):
@@ -63,22 +112,354 @@ func _exit_tree() -> void:
 		_dock.queue_free()
 
 
+## Public editor-service entry point used by scene inspector transports. The
+## same call stops an active recording, matching the capture dock button.
+func request_editor_camera_video(options: Dictionary = {}) -> void:
+	_on_record_video_pressed(options)
+
+
+func set_editor_camera_initial_view(view: Dictionary) -> Dictionary:
+	"""Store and apply a character-relative initial camera pose.
+
+	The preferred wire representation is ``position`` plus
+	``quaternion_xyzw``.  ``rotation_degrees`` is accepted as a compatibility
+	fallback for hand-authored messages, but is never used as the canonical
+	stored value.
+	"""
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return {"ok": false, "error": "edited_scene_missing"}
+	var target_path := NodePath(str(view.get("target_node", str(FEMALE_PATH))))
+	var character := scene_root.get_node_or_null(target_path) as Node3D
+	if character == null:
+		return {"ok": false, "error": "camera_follow_target_missing", "target_node": str(target_path)}
+	var viewport_index := clampi(int(view.get("viewport_index", 0)), 0, 3)
+	var position_value = view.get("position", view.get("translation", null))
+	if not position_value is Array or (position_value as Array).size() < 3:
+		return {"ok": false, "error": "camera_initial_position_missing"}
+	var position := Vector3(float(position_value[0]), float(position_value[1]), float(position_value[2]))
+	var quaternion_value = view.get("quaternion_xyzw", view.get("quaternion", null))
+	var basis := Basis.IDENTITY
+	if quaternion_value is Array and (quaternion_value as Array).size() >= 4:
+		basis = Basis(Quaternion(
+			float(quaternion_value[0]), float(quaternion_value[1]),
+			float(quaternion_value[2]), float(quaternion_value[3])
+		).normalized())
+	else:
+		var degrees_value = view.get("rotation_degrees", null)
+		if not degrees_value is Array or (degrees_value as Array).size() < 3:
+			return {"ok": false, "error": "camera_initial_quaternion_missing"}
+		var degrees := Vector3(float(degrees_value[0]), float(degrees_value[1]), float(degrees_value[2]))
+		basis = Basis.from_euler(Vector3(deg_to_rad(degrees.x), deg_to_rad(degrees.y), deg_to_rad(degrees.z)), EULER_ORDER_YXZ)
+	var relative := Transform3D(basis, position)
+	_camera_initial_view_relative_transform = relative
+	_camera_initial_view_valid = true
+	_camera_follow_character = character
+	_camera_follow_target_path = target_path
+	_camera_follow_viewport_index = viewport_index
+	_camera_follow_base_relative_transform = relative
+	_camera_follow_relative_transform = relative
+	_camera_work_zero_valid = true
+	var restore_result := _apply_camera_relative_transform(relative, character, viewport_index)
+	if not bool(restore_result.get("ok", false)):
+		return restore_result
+	var payload := _camera_view_payload(relative)
+	payload.merge({"ok": true, "target_node": str(target_path), "viewport_index": viewport_index}, true)
+	return payload
+
+
+func restore_editor_camera_initial_view() -> Dictionary:
+	if not _camera_initial_view_valid:
+		return {"ok": false, "error": "camera_initial_view_not_set"}
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var character := scene_root.get_node_or_null(_camera_follow_target_path) as Node3D if scene_root != null else null
+	if character == null:
+		return {"ok": false, "error": "camera_follow_target_missing", "target_node": str(_camera_follow_target_path)}
+	_camera_follow_character = character
+	_camera_follow_base_relative_transform = _camera_initial_view_relative_transform
+	_camera_follow_relative_transform = _camera_initial_view_relative_transform
+	_camera_work_zero_valid = true
+	var result := _apply_camera_relative_transform(
+		_camera_initial_view_relative_transform, character, _camera_follow_viewport_index
+	)
+	if bool(result.get("ok", false)):
+		result.merge(_camera_view_payload(_camera_initial_view_relative_transform), true)
+	return result
+
+
+func _apply_camera_relative_transform(relative: Transform3D, character: Node3D, viewport_index: int) -> Dictionary:
+	var editor_viewport := EditorInterface.get_editor_viewport_3d(viewport_index)
+	var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
+	if editor_camera == null:
+		return {"ok": false, "error": "editor_camera_missing", "viewport_index": viewport_index}
+	editor_camera.global_transform = character.global_transform * relative
+	return {"ok": true}
+
+
+func _camera_view_payload(relative: Transform3D) -> Dictionary:
+	var q := relative.basis.get_rotation_quaternion()
+	var euler := relative.basis.get_euler()
+	return {
+		"position": [relative.origin.x, relative.origin.y, relative.origin.z],
+		"quaternion_xyzw": [q.x, q.y, q.z, q.w],
+		"rotation_degrees": [rad_to_deg(euler.x), rad_to_deg(euler.y), rad_to_deg(euler.z)],
+	}
+
+
+## Freeze the current editor camera's complete offset from the female root.
+## Translation and heading changes then carry the camera without changing the
+## director-authored shot angle, pitch, or distance.
+func confirm_editor_camera_follow(options: Dictionary = {}) -> Dictionary:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		_set_camera_follow_error("Open an editable scene before confirming camera follow.")
+		return {"ok": false, "error": "edited_scene_missing"}
+	var target_path := NodePath(str(options.get("target_node", str(FEMALE_PATH))))
+	var character := scene_root.get_node_or_null(target_path) as Node3D
+	if character == null:
+		_set_camera_follow_error("The edited scene has no camera-follow target at %s." % target_path)
+		return {"ok": false, "error": "camera_follow_target_missing", "target_node": str(target_path)}
+	var viewport_index := int(options.get(
+		"viewport_index",
+		_viewport_choice.get_selected_id() if is_instance_valid(_viewport_choice) else 0
+	))
+	viewport_index = clampi(viewport_index, 0, 3)
+	var editor_viewport := EditorInterface.get_editor_viewport_3d(viewport_index)
+	var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
+	if editor_camera == null:
+		_set_camera_follow_error("The selected editor viewport has no active 3D camera.")
+		return {"ok": false, "error": "editor_camera_missing", "viewport_index": viewport_index}
+	_camera_follow_character = character
+	_camera_follow_target_path = target_path
+	_camera_follow_viewport_index = viewport_index
+	_camera_follow_base_relative_transform = character.global_transform.affine_inverse() \
+		* editor_camera.global_transform
+	_camera_work_zero_valid = true
+	_camera_follow_relative_transform = _camera_follow_base_relative_transform
+	_camera_follow_active = true
+	_camera_program_loaded = false
+	_camera_program_playing = false
+	if _recording_fixed_step_active:
+		_recording_camera_program_was_playing = false
+	_camera_program_elapsed = 0.0
+	var distance := _camera_follow_relative_transform.origin.length()
+	var status := "Locked Viewport %d at %.2f m from %s." % [
+		viewport_index + 1, distance, str(target_path),
+	]
+	_status_label.text = "Camera follow active. %s" % status
+	editor_camera_follow_state_changed.emit(true, status)
+	print("OTS_CAMERA_FOLLOW confirmed: %s" % status)
+	return {
+		"ok": true,
+		"active": true,
+		"target_node": str(target_path),
+		"viewport_index": viewport_index,
+		"distance": distance,
+	}
+
+
+func stop_editor_camera_follow() -> Dictionary:
+	_camera_follow_active = false
+	_camera_follow_character = null
+	_camera_program_playing = false
+	var status := "Camera follow released; the editor camera remains at its current shot."
+	if is_instance_valid(_status_label):
+		_status_label.text = status
+	editor_camera_follow_state_changed.emit(false, status)
+	print("OTS_CAMERA_FOLLOW stopped")
+	return {"ok": true, "active": false}
+
+
+func load_editor_camera_program(program: Dictionary, auto_play: bool = true) -> Dictionary:
+	var requested_target := NodePath(str(program.get("target_node", str(FEMALE_PATH))))
+	var requested_viewport := clampi(int(program.get("viewport_index", 0)), 0, 3)
+	# A program carrying initial_view is reproducible from any current editor
+	# camera.  Apply the exact quaternion pose before confirming follow so the
+	# existing follow/work-zero path adopts this setup instead of the transient
+	# viewport framing.
+	var initial_view_value = program.get("initial_view", null)
+	if initial_view_value is Dictionary:
+		var initial_view := (initial_view_value as Dictionary).duplicate(true)
+		initial_view["target_node"] = str(requested_target)
+		initial_view["viewport_index"] = requested_viewport
+		var initial_result := set_editor_camera_initial_view(initial_view)
+		if not bool(initial_result.get("ok", false)):
+			return initial_result
+	if not _camera_follow_active or requested_target != _camera_follow_target_path or \
+			requested_viewport != _camera_follow_viewport_index:
+		var confirm_result := confirm_editor_camera_follow({
+			"target_node": str(requested_target),
+			"viewport_index": requested_viewport,
+		})
+		if not bool(confirm_result.get("ok", false)):
+			return confirm_result
+	var result := _camera_motion_program.configure(
+		program, _camera_follow_base_relative_transform
+	) as Dictionary
+	if not bool(result.get("ok", false)):
+		return result
+	_camera_program_loaded = true
+	_camera_program_elapsed = 0.0
+	# A program can be loaded after recording was requested (common for an
+	# Emacs shot function). Adopt that late start into the recorder's fixed clock
+	# instead of allowing the normal editor _process(delta) clock to race it.
+	if (_video_recording or _video_capture_scheduled) and _recording_fixed_step_active and auto_play:
+		_recording_camera_program_was_playing = true
+		_camera_program_playing = false
+	else:
+		_camera_program_playing = auto_play
+	_camera_follow_relative_transform = (_camera_motion_program.sample(0.0) as Dictionary).get(
+		"transform", _camera_follow_base_relative_transform
+	) as Transform3D
+	var state := "playing" if auto_play else "loaded"
+	var status := "%s %s: %d commands, %.3f seconds%s." % [
+		"Playing" if auto_play else "Loaded",
+		str(result.get("name", "camera program")),
+		int(result.get("command_count", 0)),
+		float(result.get("duration_seconds", 0.0)),
+		", looping" if bool(result.get("loop", false)) else "",
+	]
+	editor_camera_program_state_changed.emit(state, status)
+	if is_instance_valid(_status_label):
+		_status_label.text = status
+	return result.merged({"state": state}, true)
+
+
+func play_editor_camera_program(restart: bool = false) -> Dictionary:
+	if not _camera_program_loaded:
+		return {"ok": false, "error": "camera_program_not_loaded"}
+	if not _camera_follow_active:
+		return {"ok": false, "error": "camera_follow_not_active"}
+	if restart:
+		_camera_program_elapsed = 0.0
+	if (_video_recording or _video_capture_scheduled) and _recording_fixed_step_active:
+		_recording_camera_program_was_playing = true
+		_camera_program_playing = false
+	else:
+		_camera_program_playing = true
+	var status := "Camera program playing at %.3f seconds." % _camera_program_elapsed
+	editor_camera_program_state_changed.emit("playing", status)
+	return {"ok": true, "state": "playing", "time_seconds": _camera_program_elapsed}
+
+
+func pause_editor_camera_program() -> Dictionary:
+	_camera_program_playing = false
+	if (_video_recording or _video_capture_scheduled) and _recording_fixed_step_active:
+		_recording_camera_program_was_playing = false
+	var status := "Camera program paused at %.3f seconds." % _camera_program_elapsed
+	editor_camera_program_state_changed.emit("paused", status)
+	return {"ok": true, "state": "paused", "time_seconds": _camera_program_elapsed}
+
+
+func reset_editor_camera_program() -> Dictionary:
+	_camera_program_elapsed = 0.0
+	_camera_program_playing = false
+	_camera_follow_relative_transform = _camera_follow_base_relative_transform
+	if _camera_program_loaded:
+		_camera_follow_relative_transform = (_camera_motion_program.sample(0.0) as Dictionary).get(
+			"transform", _camera_follow_base_relative_transform
+		) as Transform3D
+	var status := "Camera program reset to work zero."
+	editor_camera_program_state_changed.emit("reset", status)
+	return {"ok": true, "state": "reset", "time_seconds": 0.0}
+
+
+func clear_editor_camera_program() -> Dictionary:
+	_camera_program_loaded = false
+	_camera_program_playing = false
+	_camera_program_elapsed = 0.0
+	_camera_follow_relative_transform = _camera_follow_base_relative_transform
+	var status := "Camera program cleared; fixed follow remains active."
+	editor_camera_program_state_changed.emit("cleared", status)
+	return {"ok": true, "state": "cleared"}
+
+
+func editor_camera_program_status() -> Dictionary:
+	return {
+		"ok": true,
+		"follow_active": _camera_follow_active,
+		"program_loaded": _camera_program_loaded,
+		"program_playing": _camera_program_playing,
+		"program_name": _camera_motion_program.name if _camera_program_loaded else "",
+		"initial_view_valid": _camera_initial_view_valid,
+		"target_node": str(_camera_follow_target_path) if _camera_follow_active else "",
+		"viewport_index": _camera_follow_viewport_index if _camera_follow_active else -1,
+		"time_seconds": _camera_program_elapsed,
+		"duration_seconds": _camera_motion_program.duration_seconds if _camera_program_loaded else 0.0,
+	}
+
+
+func _process(delta: float) -> void:
+	_calibration_refresh_accumulator += maxf(0.0, delta)
+	var refresh_calibration := _calibration_refresh_accumulator >= 1.0 / 15.0
+	if refresh_calibration:
+		_calibration_refresh_accumulator = 0.0
+	if not _camera_follow_active:
+		if refresh_calibration:
+			_update_camera_coordinate_panel()
+		return
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null or not is_instance_valid(_camera_follow_character) or \
+			_camera_follow_character != scene_root.get_node_or_null(_camera_follow_target_path):
+		stop_editor_camera_follow()
+		return
+	var editor_viewport := EditorInterface.get_editor_viewport_3d(_camera_follow_viewport_index)
+	var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
+	if editor_camera == null:
+		stop_editor_camera_follow()
+		return
+	if _camera_program_loaded and _camera_program_playing:
+		_camera_program_elapsed += maxf(0.0, delta)
+		var program_sample := _camera_motion_program.sample(_camera_program_elapsed) as Dictionary
+		_camera_follow_relative_transform = program_sample.get(
+			"transform", _camera_follow_relative_transform
+		) as Transform3D
+		if bool(program_sample.get("finished", false)) and not _camera_motion_program.loop:
+			_camera_program_elapsed = _camera_motion_program.duration_seconds
+			_camera_program_playing = false
+			editor_camera_program_state_changed.emit(
+				"finished", "Camera program finished; holding its final work coordinate."
+			)
+	editor_camera.global_transform = _camera_follow_character.global_transform \
+		* _camera_follow_relative_transform
+	if refresh_calibration:
+		_update_camera_coordinate_panel()
+
+
+func _set_camera_follow_error(message: String) -> void:
+	_camera_follow_active = false
+	if is_instance_valid(_status_label):
+		_status_label.text = message
+	editor_camera_follow_state_changed.emit(false, "Error: %s" % message)
+	push_warning("OTS Camera Follow: %s" % message)
+
+
 func _build_dock() -> void:
-	_dock = VBoxContainer.new()
+	_dock = ScrollContainer.new()
 	_dock.name = "OTS Render"
 	_dock.custom_minimum_size = Vector2(260.0, 0.0)
-	_dock.add_theme_constant_override("separation", 8)
+	_dock.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_dock.follow_focus = true
+	_dock.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	# Always expose the scrollbar: the dock contains both capture controls and
+	# the camera calibration panel, which is taller than many editor layouts.
+	_dock.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	_dock_content = VBoxContainer.new()
+	_dock_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dock_content.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_dock_content.add_theme_constant_override("separation", 8)
+	_dock.add_child(_dock_content)
 
 	var title := Label.new()
 	title.text = "OTS Quick Render"
 	title.add_theme_font_size_override("font_size", 16)
-	_dock.add_child(title)
+	_dock_content.add_child(title)
 
 	var explanation := Label.new()
 	explanation.text = "Frame the actors in the 3D editor, then capture the same camera as image-generation passes. If this dock button is intercepted, use Project > Tools > Capture OTS Render Passes."
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	explanation.modulate = Color(0.78, 0.82, 0.88)
-	_dock.add_child(explanation)
+	_dock_content.add_child(explanation)
 
 	var viewport_row := HBoxContainer.new()
 	var viewport_label := Label.new()
@@ -88,9 +469,9 @@ func _build_dock() -> void:
 	_viewport_choice = OptionButton.new()
 	for index in 4:
 		_viewport_choice.add_item("Viewport %d" % (index + 1), index)
-	_viewport_choice.tooltip_text = "Viewport 1 is the normal single-view 3D editor. Choose 2–4 when using a split layout."
+		_viewport_choice.tooltip_text = "Viewport 1 is the normal single-view 3D editor. Choose 2–4 when using a split layout."
 	viewport_row.add_child(_viewport_choice)
-	_dock.add_child(viewport_row)
+	_dock_content.add_child(viewport_row)
 
 	var resolution_row := HBoxContainer.new()
 	var resolution_label := Label.new()
@@ -102,7 +483,7 @@ func _build_dock() -> void:
 		var resolution := RESOLUTIONS[index]
 		_resolution_choice.add_item("%d × %d" % [resolution.x, resolution.y], index)
 	resolution_row.add_child(_resolution_choice)
-	_dock.add_child(resolution_row)
+	_dock_content.add_child(resolution_row)
 
 	_capture_button = Button.new()
 	_capture_button.text = "Capture current editor camera"
@@ -114,21 +495,21 @@ func _build_dock() -> void:
 	# manage global viewport focus. The work itself is deferred below, so the
 	# mouse event still completes before scene duplication begins.
 	_capture_button.button_down.connect(_on_capture_pressed)
-	_dock.add_child(_capture_button)
+	_dock_content.add_child(_capture_button)
 
 	var video_separator := HSeparator.new()
-	_dock.add_child(video_separator)
+	_dock_content.add_child(video_separator)
 
 	var video_title := Label.new()
 	video_title.text = "H3 camera-motion guide"
 	video_title.add_theme_font_size_override("font_size", 14)
-	_dock.add_child(video_title)
+	_dock_content.add_child(video_title)
 
 	var video_explanation := Label.new()
 	video_explanation.text = "Record the live editor camera and animated scene, then encode the sampled frames as an H.264 MP4. Camera navigation and streamed character poses are captured together."
 	video_explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	video_explanation.modulate = Color(0.78, 0.82, 0.88)
-	_dock.add_child(video_explanation)
+	_dock_content.add_child(video_explanation)
 
 	var duration_row := HBoxContainer.new()
 	var duration_label := Label.new()
@@ -143,7 +524,27 @@ func _build_dock() -> void:
 	_video_duration.suffix = " s"
 	_video_duration.tooltip_text = "Length of the encoded guide video. Longer or high-FPS captures take more disk space and time."
 	duration_row.add_child(_video_duration)
-	_dock.add_child(duration_row)
+	_dock_content.add_child(duration_row)
+
+	_use_camera_program_duration = CheckButton.new()
+	_use_camera_program_duration.text = "Auto-clip to camera program"
+	_use_camera_program_duration.tooltip_text = "Use the loaded camera program's exact timeline duration instead of the manual Duration value."
+	_dock_content.add_child(_use_camera_program_duration)
+
+	var padding_row := HBoxContainer.new()
+	var padding_label := Label.new()
+	padding_label.text = "Program end padding"
+	padding_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	padding_row.add_child(padding_label)
+	_video_program_end_padding = SpinBox.new()
+	_video_program_end_padding.min_value = -5.0
+	_video_program_end_padding.max_value = 10.0
+	_video_program_end_padding.step = 0.05
+	_video_program_end_padding.value = 0.0
+	_video_program_end_padding.suffix = " s"
+	_video_program_end_padding.tooltip_text = "Add a final hold after the program; negative values clip before its authored end. Zero ends exactly with the camera program."
+	padding_row.add_child(_video_program_end_padding)
+	_dock_content.add_child(padding_row)
 
 	var fps_row := HBoxContainer.new()
 	var fps_label := Label.new()
@@ -157,7 +558,7 @@ func _build_dock() -> void:
 	_video_fps_choice.select(0)
 	_video_fps_choice.tooltip_text = "12 FPS is the most responsive editor-camera guide. Use 24/30 FPS only when the machine can capture the selected resolution fast enough."
 	fps_row.add_child(_video_fps_choice)
-	_dock.add_child(fps_row)
+	_dock_content.add_child(fps_row)
 
 	var delay_row := HBoxContainer.new()
 	var delay_label := Label.new()
@@ -172,32 +573,316 @@ func _build_dock() -> void:
 	_video_start_delay.suffix = " s"
 	_video_start_delay.tooltip_text = "Time to move the pointer from this dock into the 3D viewport before frame capture begins."
 	delay_row.add_child(_video_start_delay)
-	_dock.add_child(delay_row)
+	_dock_content.add_child(delay_row)
 
 	_keep_video_frames = CheckButton.new()
 	_keep_video_frames.text = "Keep source JPEG frames"
 	_keep_video_frames.tooltip_text = "Normally the temporary JPEG sequence is deleted after MP4 encoding. Enable this for debugging or external encoders."
-	_dock.add_child(_keep_video_frames)
+	_dock_content.add_child(_keep_video_frames)
 
 	_record_video_button = Button.new()
 	_record_video_button.text = "Record editor camera motion"
 	_record_video_button.focus_mode = Control.FOCUS_CLICK
 	_record_video_button.mouse_filter = Control.MOUSE_FILTER_STOP
-	_record_video_button.tooltip_text = "After the start delay, orbit/pan/zoom or stream character motion. Click again to stop early."
+	_record_video_button.tooltip_text = "After the start delay, orbit/pan/zoom or stream character motion. Click again to stop early. Emacs can supply duration, FPS, resolution, delay, and frame-retention options."
 	_record_video_button.button_down.connect(_on_record_video_pressed)
-	_dock.add_child(_record_video_button)
+	_dock_content.add_child(_record_video_button)
 
 	_open_button = Button.new()
 	_open_button.text = "Show last capture in Finder"
 	_open_button.disabled = true
 	_open_button.pressed.connect(_show_last_capture)
-	_dock.add_child(_open_button)
+	_dock_content.add_child(_open_button)
 
 	_status_label = Label.new()
 	_status_label.text = "Open my_manual_rig_pose.tscn and frame the OTS shot."
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_label.modulate = Color(0.9, 0.76, 0.38)
-	_dock.add_child(_status_label)
+	_dock_content.add_child(_status_label)
+
+	# Keep the primary recording workflow near the top of the dock. Camera
+	# calibration is intentionally appended below it and remains reachable via
+	# the always-visible vertical scrollbar.
+	_build_camera_calibration_panel()
+
+
+func _build_camera_calibration_panel() -> void:
+	## Live director readout for the transient editor camera. These values are
+	## the exact character-local coordinates consumed by the Emacs G-code DSL.
+	var separator := HSeparator.new()
+	_dock_content.add_child(separator)
+	var title := Label.new()
+	title.text = "Camera Work Coordinates"
+	title.add_theme_font_size_override("font_size", 14)
+	_dock_content.add_child(title)
+	var help := Label.new()
+	help.text = "Live editor view relative to IK_character. Quaternion XYZW is authoritative; Euler is only a readable angle view. Confirm follow to get G1 offsets from work zero."
+	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	help.modulate = Color(0.78, 0.82, 0.88)
+	_dock_content.add_child(help)
+	_camera_coordinate_status = Label.new()
+	_camera_coordinate_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_camera_coordinate_status.modulate = Color(0.9, 0.76, 0.38)
+	_dock_content.add_child(_camera_coordinate_status)
+	_camera_coordinate_values = Label.new()
+	_camera_coordinate_values.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_camera_coordinate_values.text = "Position: unavailable"
+	_dock_content.add_child(_camera_coordinate_values)
+	var calibration_actions := HBoxContainer.new()
+	var set_zero := Button.new()
+	set_zero.text = "Set work zero"
+	set_zero.tooltip_text = "Remember the current framing as G-code work zero without locking the editor camera."
+	set_zero.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	set_zero.button_down.connect(_set_camera_work_zero_unlocked)
+	calibration_actions.add_child(set_zero)
+	var copy_g1 := Button.new()
+	copy_g1.text = "Copy current G1 target"
+	copy_g1.tooltip_text = "Copy a godot-camera-g1 form using the current camera offset from confirmed work zero."
+	copy_g1.button_down.connect(_copy_current_g1_target)
+	calibration_actions.add_child(copy_g1)
+	_dock_content.add_child(calibration_actions)
+	var initial_view_actions := HBoxContainer.new()
+	var copy_initial_view := Button.new()
+	copy_initial_view.text = "Copy initial view API"
+	copy_initial_view.tooltip_text = "Copy a quaternion-based godot-camera-set-initial-view form for this exact framing."
+	copy_initial_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	copy_initial_view.button_down.connect(_copy_current_initial_view)
+	initial_view_actions.add_child(copy_initial_view)
+	var restore_initial_view := Button.new()
+	restore_initial_view.text = "Restore initial view"
+	restore_initial_view.tooltip_text = "Restore the last initial view captured through the API."
+	restore_initial_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	restore_initial_view.button_down.connect(_restore_initial_view_from_panel)
+	initial_view_actions.add_child(restore_initial_view)
+	_dock_content.add_child(initial_view_actions)
+
+	var orbit_separator := HSeparator.new()
+	_dock_content.add_child(orbit_separator)
+	var orbit_title := Label.new()
+	orbit_title.text = "Orbit Reference Gizmo"
+	orbit_title.add_theme_font_size_override("font_size", 14)
+	_dock_content.add_child(orbit_title)
+	var orbit_help := Label.new()
+	orbit_help.text = "Create/select the marker, then drag its gizmo in the 3D viewport. It defines the character-local orbit pivot."
+	orbit_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	orbit_help.modulate = Color(0.78, 0.82, 0.88)
+	_dock_content.add_child(orbit_help)
+	var orbit_actions := HBoxContainer.new()
+	var create_reference := Button.new()
+	create_reference.text = "Create / select pivot"
+	create_reference.tooltip_text = "Create CameraOrbitReference under IK_character and select it in the scene tree."
+	create_reference.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	create_reference.button_down.connect(_create_or_select_orbit_reference)
+	orbit_actions.add_child(create_reference)
+	var copy_g2 := Button.new()
+	copy_g2.text = "Copy G2"
+	copy_g2.tooltip_text = "Copy the measured orbit values as a godot-camera-g2-orbit form."
+	copy_g2.button_down.connect(_copy_current_g2_orbit)
+	orbit_actions.add_child(copy_g2)
+	_dock_content.add_child(orbit_actions)
+	_camera_orbit_status = Label.new()
+	_camera_orbit_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_camera_orbit_status.modulate = Color(0.9, 0.76, 0.38)
+	_dock_content.add_child(_camera_orbit_status)
+	_camera_orbit_values = Label.new()
+	_camera_orbit_values.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_camera_orbit_values.text = "Pivot: unavailable"
+	_dock_content.add_child(_camera_orbit_values)
+
+
+func _current_editor_camera() -> Camera3D:
+	var viewport_index := _camera_follow_viewport_index
+	if not _camera_follow_active and is_instance_valid(_viewport_choice):
+		viewport_index = _viewport_choice.get_selected_id()
+	var viewport := EditorInterface.get_editor_viewport_3d(clampi(viewport_index, 0, 3))
+	return viewport.get_camera_3d() if viewport != null else null
+
+
+func _camera_measurement_character() -> Node3D:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return null
+	if is_instance_valid(_camera_follow_character):
+		return _camera_follow_character
+	return scene_root.get_node_or_null(FEMALE_PATH) as Node3D
+
+
+func _camera_relative_transform() -> Transform3D:
+	var character := _camera_measurement_character()
+	var camera := _current_editor_camera()
+	if character == null or camera == null:
+		return Transform3D.IDENTITY
+	return character.global_transform.affine_inverse() * camera.global_transform
+
+
+func _update_camera_coordinate_panel() -> void:
+	if not is_instance_valid(_camera_coordinate_values):
+		return
+	var character := _camera_measurement_character()
+	var camera := _current_editor_camera()
+	if character == null or camera == null:
+		_camera_coordinate_status.text = "Open a 3D scene and select an editor viewport."
+		_camera_coordinate_values.text = "Position: unavailable"
+		_camera_orbit_status.text = "Create the pivot marker after opening the scene."
+		_camera_orbit_values.text = "Pivot: unavailable"
+		return
+	var relative := character.global_transform.affine_inverse() * camera.global_transform
+	var p := relative.origin
+	var quaternion := relative.basis.get_rotation_quaternion()
+	var degrees := relative.basis.get_euler() * 180.0 / PI
+	var work_offset := relative.origin - _camera_follow_base_relative_transform.origin
+	var zero_state := "follow active" if _camera_follow_active else \
+		("work zero set; camera unlocked" if _camera_work_zero_valid else "work zero not set")
+	_camera_coordinate_status.text = "Viewport %d • %s" % [
+		(_camera_follow_viewport_index if _camera_follow_active else _viewport_choice.get_selected_id()) + 1,
+		zero_state,
+	]
+	_camera_coordinate_values.text = "Current local camera\n  X %+.3f   Y %+.3f   Z %+.3f\nRotation (quaternion XYZW)\n  X %+.6f  Y %+.6f  Z %+.6f  W %+.6f\nEuler readout (degrees)\n  X %+.1f   Y %+.1f   Z %+.1f\nG1 target from work zero\n  X %+.3f   Y %+.3f   Z %+.3f" % [
+		p.x, p.y, p.z, quaternion.x, quaternion.y, quaternion.z, quaternion.w,
+		degrees.x, degrees.y, degrees.z,
+		work_offset.x, work_offset.y, work_offset.z,
+	]
+	_update_orbit_measurement(relative)
+
+
+func _update_orbit_measurement(camera_relative: Transform3D) -> void:
+	var character := _camera_measurement_character()
+	if not is_instance_valid(_orbit_reference) and character != null:
+		_orbit_reference = character.get_node_or_null(NodePath(CAMERA_REFERENCE_NAME)) as Marker3D
+	if character == null or not is_instance_valid(_orbit_reference):
+		_camera_orbit_status.text = "Create / select the pivot marker to measure orbit."
+		_camera_orbit_values.text = "Pivot: unavailable"
+		return
+	var pivot := character.global_transform.affine_inverse() * _orbit_reference.global_transform
+	var base_arm := _camera_follow_base_relative_transform.origin - pivot.origin
+	var current_arm := camera_relative.origin - pivot.origin
+	var base_horizontal := Vector2(base_arm.x, base_arm.z)
+	var current_horizontal := Vector2(current_arm.x, current_arm.z)
+	var base_radius := base_horizontal.length()
+	var current_radius := current_horizontal.length()
+	var radius_delta := current_radius - base_radius
+	var base_pitch := rad_to_deg(atan2(base_arm.y, maxf(0.0001, base_radius)))
+	var current_pitch := rad_to_deg(atan2(current_arm.y, maxf(0.0001, current_radius)))
+	var pitch_delta := current_pitch - base_pitch
+	var yaw_delta := 0.0
+	if base_radius > 0.0001 and current_radius > 0.0001:
+		yaw_delta = rad_to_deg(base_horizontal.angle_to(current_horizontal))
+	var height_delta := camera_relative.origin.y - _camera_follow_base_relative_transform.origin.y
+	_camera_orbit_status.text = "Marker: %s (drag its gizmo)" % _orbit_reference.name
+	_camera_orbit_values.text = "Pivot local\n  X %+.3f   Y %+.3f   Z %+.3f\nDerived G2/G3 values\n  yaw %+.1f°   pitch %+.1f°\n  radius-delta %+.3f m\n  height-delta %+.3f m" % [
+		pivot.origin.x, pivot.origin.y, pivot.origin.z,
+		yaw_delta, pitch_delta, radius_delta, height_delta,
+	]
+
+
+func _create_or_select_orbit_reference() -> void:
+	var character := _camera_measurement_character()
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if character == null or scene_root == null:
+		return
+	if not is_instance_valid(_orbit_reference):
+		_orbit_reference = character.get_node_or_null(NodePath(CAMERA_REFERENCE_NAME)) as Marker3D
+	if not is_instance_valid(_orbit_reference):
+		_orbit_reference = Marker3D.new()
+		_orbit_reference.name = CAMERA_REFERENCE_NAME
+		_orbit_reference.gizmo_extents = 0.35
+		character.add_child(_orbit_reference)
+		_orbit_reference.owner = scene_root
+		_orbit_reference.position = Vector3(0.0, 1.2, 0.0)
+		_orbit_reference.set_meta("ots_camera_orbit_reference", true)
+	var selection := EditorInterface.get_selection()
+	selection.clear()
+	selection.add_node(_orbit_reference)
+	_camera_orbit_status.text = "Marker selected; drag its gizmo, then copy G2."
+	_update_camera_coordinate_panel()
+
+
+func _copy_current_g1_target() -> void:
+	if not _camera_work_zero_valid:
+		_camera_coordinate_status.text = "Set work zero first; G1 uses offsets from that framing."
+		return
+	var relative := _camera_relative_transform()
+	var offset := relative.origin - _camera_follow_base_relative_transform.origin
+	DisplayServer.clipboard_set(
+		"(godot-camera-g1 :x %.4f :y %.4f :z %.4f)" % [offset.x, offset.y, offset.z]
+	)
+	_status_label.text = "Copied current G1 target to the system clipboard."
+
+
+func _copy_current_initial_view() -> void:
+	var character := _camera_measurement_character()
+	var camera := _current_editor_camera()
+	if character == null or camera == null:
+		_camera_coordinate_status.text = "Open a 3D scene and select an editor viewport first."
+		return
+	var relative := character.global_transform.affine_inverse() * camera.global_transform
+	var q := relative.basis.get_rotation_quaternion()
+	var command := "(godot-camera-set-initial-view :position '(%.6f %.6f %.6f) :quaternion '(%.9f %.9f %.9f %.9f))" % [
+		relative.origin.x, relative.origin.y, relative.origin.z,
+		q.x, q.y, q.z, q.w,
+	]
+	DisplayServer.clipboard_set(command)
+	_camera_initial_view_relative_transform = relative
+	_camera_initial_view_valid = true
+	_camera_follow_character = character
+	_camera_follow_target_path = character.get_path()
+	_camera_follow_viewport_index = _viewport_choice.get_selected_id() if is_instance_valid(_viewport_choice) else _camera_follow_viewport_index
+	_camera_follow_base_relative_transform = relative
+	_camera_work_zero_valid = true
+	_status_label.text = "Copied quaternion initial-view API to the system clipboard."
+
+
+func _restore_initial_view_from_panel() -> void:
+	var result := restore_editor_camera_initial_view()
+	if bool(result.get("ok", false)):
+		_status_label.text = "Restored quaternion initial camera view."
+	else:
+		_camera_coordinate_status.text = "No initial view captured yet. Use Copy initial view API after framing the shot."
+
+
+func _copy_current_g2_orbit() -> void:
+	if not _camera_work_zero_valid or not is_instance_valid(_orbit_reference):
+		_camera_orbit_status.text = "Set work zero and create the pivot marker first."
+		return
+	var relative := _camera_relative_transform()
+	var character := _camera_measurement_character()
+	var pivot := character.global_transform.affine_inverse() * _orbit_reference.global_transform
+	var base_arm := _camera_follow_base_relative_transform.origin - pivot.origin
+	var current_arm := relative.origin - pivot.origin
+	var base_horizontal := Vector2(base_arm.x, base_arm.z)
+	var current_horizontal := Vector2(current_arm.x, current_arm.z)
+	var base_radius := base_horizontal.length()
+	var current_radius := current_horizontal.length()
+	var yaw := rad_to_deg(base_horizontal.angle_to(current_horizontal)) if base_radius > 0.0001 and current_radius > 0.0001 else 0.0
+	var pitch := rad_to_deg(atan2(current_arm.y, maxf(0.0001, current_radius))) - rad_to_deg(atan2(base_arm.y, maxf(0.0001, base_radius)))
+	var radius_delta := current_radius - base_radius
+	var height_delta := relative.origin.y - _camera_follow_base_relative_transform.origin.y
+	var command := "(godot-camera-g%s-orbit :degrees %.2f :pitch %.2f :radius-delta %.4f :height-delta %.4f :pivot '(%.4f %.4f %.4f))" % [
+		"2" if yaw <= 0.0 else "3", absf(yaw), pitch, radius_delta, height_delta,
+		pivot.origin.x, pivot.origin.y, pivot.origin.z,
+	]
+	DisplayServer.clipboard_set(command)
+	_status_label.text = "Copied current orbit parameters to the system clipboard."
+
+
+func _set_camera_work_zero_unlocked() -> void:
+	var character := _camera_measurement_character()
+	var camera := _current_editor_camera()
+	if character == null or camera == null:
+		_camera_coordinate_status.text = "Open a 3D scene and select an editor viewport first."
+		return
+	_camera_follow_character = null
+	_camera_follow_target_path = FEMALE_PATH
+	_camera_follow_viewport_index = _viewport_choice.get_selected_id()
+	_camera_follow_base_relative_transform = character.global_transform.affine_inverse() \
+		* camera.global_transform
+	_camera_follow_relative_transform = _camera_follow_base_relative_transform
+	_camera_follow_active = false
+	_camera_work_zero_valid = true
+	_camera_program_playing = false
+	_camera_coordinate_status.text = "Work zero set; editor camera remains unlocked for calibration."
+	_status_label.text = "Camera work zero set. Navigate to an endpoint, then copy G1 or G2/G3."
+	_update_camera_coordinate_panel()
 
 
 func _on_capture_pressed() -> void:
@@ -360,21 +1045,83 @@ func _capture_current_editor_camera() -> void:
 	print("OTS_CAPTURE completed: %s" % output_directory)
 
 
-func _on_record_video_pressed() -> void:
+func _on_record_video_pressed(options: Dictionary = {}) -> void:
 	if _video_recording:
 		_video_cancel_requested = true
 		_record_video_button.disabled = true
 		_record_video_button.text = "Stopping after current frame…"
 		_status_label.text = "Stopping the camera-motion capture after the current frame…"
+		editor_camera_video_state_changed.emit(
+			true, "Stopping after the current captured frame…"
+		)
 		return
 	if _capturing or _capture_scheduled or _video_capture_scheduled:
 		_status_label.text = "A capture is already active. Wait for it to finish."
 		return
 	_video_capture_scheduled = true
 	_video_cancel_requested = false
-	_status_label.text = "Camera-motion recording requested; preparing the scene…"
+	_apply_video_options(options)
+	# Enter the fixed-step clock immediately, before the deferred scene-copy
+	# setup. Emacs commonly sends walk.restart and camera.program.load directly
+	# after this request; locking here prevents even one ordinary editor frame
+	# from racing those commands.
+	var pending_scene_root := EditorInterface.get_edited_scene_root()
+	if pending_scene_root != null:
+		_begin_fixed_step_capture(pending_scene_root)
+	_status_label.text = "Camera-motion recording requested; preparing fixed-step scene capture…"
+	editor_camera_video_state_changed.emit(
+		true, "Recording requested; preparing fixed-step off-screen capture…"
+	)
 	print("OTS_VIDEO requested from editor viewport %d" % (_viewport_choice.get_selected_id() + 1))
 	call_deferred("_record_editor_camera_video")
+
+
+func _apply_video_options(options: Dictionary) -> void:
+	"""Apply transport-supplied recording options before a new take.
+
+	The dock remains the visual editor, while Emacs/TCP can author the same
+	parameters deterministically. Unknown fields are ignored for forward
+	compatibility.
+	"""
+	if options.is_empty():
+		return
+	if options.has("duration") and is_instance_valid(_video_duration):
+		_video_duration.value = clampf(float(options.get("duration")), _video_duration.min_value, _video_duration.max_value)
+	if options.has("auto_clip_to_camera_program") and is_instance_valid(_use_camera_program_duration):
+		_use_camera_program_duration.button_pressed = bool(options.get("auto_clip_to_camera_program"))
+	if options.has("program_end_padding") and is_instance_valid(_video_program_end_padding):
+		_video_program_end_padding.value = clampf(
+			float(options.get("program_end_padding")),
+			_video_program_end_padding.min_value,
+			_video_program_end_padding.max_value
+		)
+	if options.has("start_delay") and is_instance_valid(_video_start_delay):
+		_video_start_delay.value = clampf(float(options.get("start_delay")), _video_start_delay.min_value, _video_start_delay.max_value)
+	if options.has("keep_frames") and is_instance_valid(_keep_video_frames):
+		_keep_video_frames.button_pressed = bool(options.get("keep_frames"))
+	if options.has("fps") and is_instance_valid(_video_fps_choice):
+		var requested_fps := int(options.get("fps"))
+		for index in VIDEO_FRAME_RATES.size():
+			if VIDEO_FRAME_RATES[index] == requested_fps:
+				_video_fps_choice.select(index)
+				break
+	if (options.has("resolution") or (options.has("width") and options.has("height"))) and is_instance_valid(_resolution_choice):
+		var resolution_value = options.get("resolution", null)
+		var requested_size := Vector2i.ZERO
+		if resolution_value is Array and (resolution_value as Array).size() >= 2:
+			requested_size = Vector2i(int(resolution_value[0]), int(resolution_value[1]))
+		elif options.has("width") and options.has("height"):
+			requested_size = Vector2i(int(options.get("width")), int(options.get("height")))
+		if requested_size != Vector2i.ZERO:
+			for index in RESOLUTIONS.size():
+				if RESOLUTIONS[index] == requested_size:
+					_resolution_choice.select(index)
+					break
+	if options.has("viewport") and is_instance_valid(_viewport_choice):
+		# Emacs presents viewport numbers as 1-based; the Godot control stores ids.
+		_viewport_choice.select(clampi(int(options.get("viewport")) - 1, 0, 3))
+	elif options.has("viewport_index") and is_instance_valid(_viewport_choice):
+		_viewport_choice.select(clampi(int(options.get("viewport_index")), 0, 3))
 
 
 func _record_editor_camera_video() -> void:
@@ -390,6 +1137,8 @@ func _record_editor_camera_video() -> void:
 	if scene_root == null:
 		_finish_video_with_error("Open an editable 3D scene before recording.")
 		return
+	if not _recording_fixed_step_active:
+		_begin_fixed_step_capture(scene_root)
 
 	var editor_viewport := EditorInterface.get_editor_viewport_3d(_viewport_choice.get_selected_id())
 	if editor_viewport == null:
@@ -407,8 +1156,6 @@ func _record_editor_camera_video() -> void:
 
 	var resolution := RESOLUTIONS[_resolution_choice.get_selected_id()]
 	var fps := VIDEO_FRAME_RATES[_video_fps_choice.get_selected_id()]
-	var requested_duration := float(_video_duration.value)
-	var requested_frames := maxi(1, ceili(requested_duration * float(fps)))
 	var start_delay := float(_video_start_delay.value)
 	var timestamp := Time.get_datetime_string_from_system().replace(":", "-")
 	var output_resource_path := "%s/%s-camera-motion" % [OUTPUT_ROOT, timestamp]
@@ -466,28 +1213,53 @@ func _record_editor_camera_video() -> void:
 		capture_viewport.queue_free()
 		_remove_frame_directory(frames_directory)
 		DirAccess.remove_absolute(output_directory)
+		_end_fixed_step_capture()
 		_finish_video_cancelled("Camera-motion recording cancelled before the first frame.")
 		return
 
+	# Resolve automatic duration after the preparation delay. This permits a
+	# program sent immediately after the record request to be adopted before the
+	# first output frame, while the preferred workflow still loads it first.
+	var requested_duration := float(_video_duration.value)
+	var duration_source := "manual"
+	var camera_program_duration := 0.0
+	var program_end_padding := float(_video_program_end_padding.value)
+	if _use_camera_program_duration.button_pressed:
+		if not _camera_program_loaded or _camera_motion_program.duration_seconds <= 0.0:
+			capture_viewport.queue_free()
+			_remove_frame_directory(frames_directory)
+			DirAccess.remove_absolute(output_directory)
+			_finish_video_with_error(
+				"Auto-clip requires a loaded camera program. Send the program before starting the recording."
+			)
+			return
+		camera_program_duration = _camera_motion_program.duration_seconds
+		requested_duration = maxf(1.0 / float(fps), camera_program_duration + program_end_padding)
+		duration_source = "camera_program"
+	var requested_frames := maxi(1, ceili(requested_duration * float(fps)))
+
 	var camera_samples: Array[Dictionary] = []
 	var captured_frames := 0
-	var start_usec := Time.get_ticks_usec()
 	for frame_index in requested_frames:
-		if _video_cancel_requested:
-			break
-
-		# Pace samples in real editor time so mouse navigation remains responsive.
-		# If image encoding falls behind, the next sample is captured immediately
-		# rather than blocking editor input in a catch-up sleep.
-		var target_usec := start_usec + int(float(frame_index) * 1000000.0 / float(fps))
-		while Time.get_ticks_usec() < target_usec and not _video_cancel_requested:
-			await get_tree().process_frame
 		if _video_cancel_requested:
 			break
 
 		_sync_live_capture_state(live_scene_bindings)
 		_copy_camera(editor_camera, capture_camera)
-		camera_samples.append(_serialize_camera_sample(capture_camera, frame_index, fps))
+		var timing_sample := _serialize_camera_sample(capture_camera, frame_index, fps)
+		if is_instance_valid(_recording_walk_controller):
+			timing_sample["walk_time_seconds"] = float(
+				_recording_walk_controller.get("preview_time_seconds")
+			)
+		timing_sample["camera_program_time_seconds"] = _camera_program_elapsed
+		var sampled_character := scene_root.get_node_or_null(FEMALE_PATH) as Node3D
+		if sampled_character != null:
+			timing_sample["character_position"] = [
+				sampled_character.global_position.x,
+				sampled_character.global_position.y,
+				sampled_character.global_position.z,
+			]
+		camera_samples.append(timing_sample)
 		var frame_image := await _render_image(capture_viewport)
 		var frame_path := frames_directory.path_join("frame_%06d.jpg" % frame_index)
 		var frame_error := frame_image.save_jpg(frame_path, 0.94)
@@ -500,11 +1272,16 @@ func _record_editor_camera_video() -> void:
 			return
 		captured_frames += 1
 		_status_label.text = "Recording camera + live scene: frame %d / %d — orbit, navigate, or stream motion now." % [captured_frames, requested_frames]
+		# Advance the source evaluator only after the frame has been rendered.
+		# This fixed-step clock is independent of GPU/JPEG latency, so expensive
+		# avatar skinning cannot make the resulting MP4 play fast-forwarded.
+		_advance_fixed_step_capture(1.0 / float(fps))
 
 	capture_viewport.queue_free()
 	if captured_frames == 0:
 		_remove_frame_directory(frames_directory)
 		DirAccess.remove_absolute(output_directory)
+		_end_fixed_step_capture()
 		_finish_video_cancelled("Camera-motion recording stopped before a frame was captured.")
 		return
 
@@ -547,6 +1324,9 @@ func _record_editor_camera_video() -> void:
 		resolution,
 		fps,
 		requested_duration,
+		duration_source,
+		camera_program_duration,
+		program_end_padding,
 		captured_frames,
 		output_resource_path,
 		camera_samples,
@@ -561,6 +1341,7 @@ func _record_editor_camera_video() -> void:
 		_remove_frame_directory(frames_directory)
 
 	_last_output_directory = output_directory
+	_end_fixed_step_capture()
 	_open_button.disabled = false
 	_capture_button.disabled = false
 	_video_recording = false
@@ -569,8 +1350,80 @@ func _record_editor_camera_video() -> void:
 	_record_video_button.disabled = false
 	_record_video_button.text = "Record editor camera motion"
 	var actual_duration := float(captured_frames) / float(fps)
-	_status_label.text = "Recorded %d frames (%.2f s at %d FPS) to:\n%s" % [captured_frames, actual_duration, fps, output_resource_path]
+	_status_label.text = "Recorded %d frames (%.2f s at %d FPS, fixed-step timing) to:\n%s" % [captured_frames, actual_duration, fps, output_resource_path]
+	editor_camera_video_state_changed.emit(
+		false,
+		"Finished: %s/editor_camera_motion.mp4" % output_resource_path
+	)
 	print("OTS_VIDEO completed: %s" % video_path)
+
+
+func _begin_fixed_step_capture(scene_root: Node) -> void:
+	_recording_fixed_step_active = true
+	_recording_walk_controller = scene_root.find_child("FemaleWalkController", true, false)
+	if _recording_walk_controller == null:
+		_recording_walk_controller = _find_fixed_step_controller(scene_root)
+	_recording_walk_was_playing = false
+	if is_instance_valid(_recording_walk_controller) and \
+			_recording_walk_controller.has_method("editor_capture_begin_fixed_step"):
+		var walk_state := _recording_walk_controller.call("editor_capture_begin_fixed_step") as Dictionary
+		_recording_walk_was_playing = bool(walk_state.get("was_playing", false))
+	# A programmed camera has the same wall-clock problem as the walk evaluator.
+	# Freeze its normal _process clock and advance it beside the fixed gait step.
+	_recording_camera_program_was_playing = _camera_program_loaded and _camera_program_playing
+	if _recording_camera_program_was_playing:
+		_camera_program_playing = false
+
+
+func _find_fixed_step_controller(node: Node) -> Node:
+	if node.has_method("editor_capture_begin_fixed_step") and \
+			node.has_method("editor_capture_step_fixed"):
+		return node
+	for child in node.get_children():
+		var found := _find_fixed_step_controller(child)
+		if found != null:
+			return found
+	return null
+
+
+func _advance_fixed_step_capture(delta_seconds: float) -> void:
+	if not _recording_fixed_step_active:
+		return
+	if is_instance_valid(_recording_walk_controller) and \
+			_recording_walk_controller.has_method("editor_capture_step_fixed"):
+		_recording_walk_controller.call("editor_capture_step_fixed", delta_seconds)
+	if _recording_camera_program_was_playing and _camera_program_loaded:
+		_camera_program_elapsed += maxf(0.0, delta_seconds)
+		var program_sample := _camera_motion_program.sample(_camera_program_elapsed) as Dictionary
+		_camera_follow_relative_transform = program_sample.get(
+			"transform", _camera_follow_relative_transform
+		) as Transform3D
+		if bool(program_sample.get("finished", false)) and not _camera_motion_program.loop:
+			_camera_program_elapsed = _camera_motion_program.duration_seconds
+			_recording_camera_program_was_playing = false
+	# Apply the newly sampled character-relative camera immediately. Waiting for
+	# the plugin's next _process() would make capture_camera copy the previous
+	# frame's global transform while the character is already at the new frame.
+	if _camera_follow_active and is_instance_valid(_camera_follow_character):
+		var editor_viewport := EditorInterface.get_editor_viewport_3d(_camera_follow_viewport_index)
+		var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
+		if editor_camera != null:
+			editor_camera.global_transform = _camera_follow_character.global_transform \
+				* _camera_follow_relative_transform
+
+
+func _end_fixed_step_capture() -> void:
+	if _recording_fixed_step_active and is_instance_valid(_recording_walk_controller) and \
+			_recording_walk_controller.has_method("editor_capture_end_fixed_step"):
+		_recording_walk_controller.call("editor_capture_end_fixed_step", _recording_walk_was_playing)
+	# Resume a camera program that was active before recording. If it finished
+	# during the fixed-step take, leave it at its final authored frame.
+	if _recording_camera_program_was_playing and _camera_program_loaded:
+		_camera_program_playing = true
+	_recording_walk_controller = null
+	_recording_walk_was_playing = false
+	_recording_fixed_step_active = false
+	_recording_camera_program_was_playing = false
 
 
 func _copy_camera(source: Camera3D, destination: Camera3D) -> void:
@@ -604,6 +1457,14 @@ func _prepare_live_capture_copy(node: Node) -> void:
 	# The editor scene remains the sole evaluator. Native modifiers and animation
 	# players in the off-screen duplicate must not overwrite the pose copied from
 	# the source between synchronization and RenderingServer submission.
+	var editor_only_trajectory_preview := node.has_meta("editor_only_trajectory_preview")
+	if node.name == "CurvePreview" and node.get_parent() != null and \
+			node.get_parent().name == "FemaleWalkTrajectory":
+		editor_only_trajectory_preview = true
+	if editor_only_trajectory_preview:
+		if node is Node3D:
+			(node as Node3D).visible = false
+		return
 	if node is SkeletonModifier3D:
 		(node as SkeletonModifier3D).active = false
 	elif node is AnimationPlayer:
@@ -960,6 +1821,9 @@ func _write_video_metadata(
 	resolution: Vector2i,
 	fps: int,
 	requested_duration: float,
+	duration_source: String,
+	camera_program_duration: float,
+	program_end_padding: float,
 	captured_frames: int,
 	resource_directory: String,
 	camera_samples: Array[Dictionary],
@@ -974,8 +1838,15 @@ func _write_video_metadata(
 		"resolution": [resolution.x, resolution.y],
 		"fps": fps,
 		"requested_duration_seconds": requested_duration,
+		"duration_source": duration_source,
+		"camera_program_duration_seconds": camera_program_duration,
+		"program_end_padding_seconds": program_end_padding,
 		"captured_frames": captured_frames,
 		"encoded_duration_seconds": float(captured_frames) / float(fps),
+		"timing": {
+			"mode": "fixed_step_after_render",
+			"description": "Source gait and camera-program time advance by exactly one output frame after each rendered frame; GPU latency cannot fast-forward the MP4.",
+		},
 		"video_codec": "H.264 / libx264",
 		"pixel_format": "yuv420p",
 		"color_space": "BT.709 limited range",
@@ -1029,6 +1900,8 @@ func _remove_frame_directory(frames_directory: String) -> void:
 
 func _set_video_options_enabled(enabled: bool) -> void:
 	_video_duration.editable = enabled
+	_use_camera_program_duration.disabled = not enabled
+	_video_program_end_padding.editable = enabled
 	_video_fps_choice.disabled = not enabled
 	_video_start_delay.editable = enabled
 	_keep_video_frames.disabled = not enabled
@@ -1037,6 +1910,7 @@ func _set_video_options_enabled(enabled: bool) -> void:
 
 
 func _finish_video_with_error(message: String) -> void:
+	_end_fixed_step_capture()
 	_video_capture_scheduled = false
 	_video_recording = false
 	_video_cancel_requested = false
@@ -1045,10 +1919,12 @@ func _finish_video_with_error(message: String) -> void:
 	_record_video_button.disabled = false
 	_record_video_button.text = "Record editor camera motion"
 	_status_label.text = message
+	editor_camera_video_state_changed.emit(false, "Error: %s" % message)
 	push_error("OTS Video: %s" % message)
 
 
 func _finish_video_cancelled(message: String) -> void:
+	_end_fixed_step_capture()
 	_video_capture_scheduled = false
 	_video_recording = false
 	_video_cancel_requested = false
@@ -1057,6 +1933,7 @@ func _finish_video_cancelled(message: String) -> void:
 	_record_video_button.disabled = false
 	_record_video_button.text = "Record editor camera motion"
 	_status_label.text = message
+	editor_camera_video_state_changed.emit(false, message)
 	print("OTS_VIDEO cancelled: %s" % message)
 
 

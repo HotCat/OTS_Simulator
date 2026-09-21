@@ -1,0 +1,43 @@
+{
+	"type": "linear",
+	"distance_mode": "gait",
+	"speed_profile": "constant",
+	"pace_scale": 1.0,
+	"contact_correction": 0.0,
+	"foot_ik": true,
+	"foot_ik_strength": 1.0,
+	"local_forward": [0.0, 0.0, -1.0],
+	"upright_root": true,
+	"ground_lock": true,
+	"ground_y": 0.0,
+	"ground_clearance": 0.045,
+	"skeleton_origin_y": 0.0944922,
+	"max_torso_tilt_degrees": 5.0,
+	"torso_upright_strength": 1.0,
+	"max_head_up_degrees": 4.0,
+	"head_forward_axis": [0.0, 0.0, 1.0],
+	"scene_origin_node": "FemaleWalkTrajectory/Waypoint_00",
+	"waypoints": [
+		{
+			"position": [
+				-3.003434,
+				0.0,
+				-1.2188
+			]
+		},
+		{
+			"position": [
+				-11.3669103,
+				0.0,
+				7.3865627
+			]
+		},
+		{
+			"position": [
+				-19.7303866,
+				0.0,
+				15.9919253
+			]
+		}
+	]
+}

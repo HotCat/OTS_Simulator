@@ -4,6 +4,7 @@
 .DS_Store
 *~
 \#*\#
+.#*
 *.elc
 __pycache__/
 *.py[cod]
