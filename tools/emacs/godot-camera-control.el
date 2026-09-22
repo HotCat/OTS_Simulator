@@ -49,6 +49,42 @@
   :type 'string
   :group 'godot-camera)
 
+(defcustom godot-character-node "IK_character"
+  "Scene-relative character node used by the pose-stream commands."
+  :type 'string
+  :group 'godot-camera)
+
+(defcustom godot-character-skeleton "Skeleton3D"
+  "Skeleton path below `godot-character-node'."
+  :type 'string
+  :group 'godot-camera)
+
+(defcustom godot-character-controls "../PoseControls"
+  "IK controls path below the character skeleton."
+  :type 'string
+  :group 'godot-camera)
+
+(defcustom godot-collapse-python
+  "/Users/hotcat/miniconda3/envs/sam_3d_body/bin/python"
+  "Python executable used to stream a cached collapse motion."
+  :type 'file
+  :group 'godot-camera)
+
+(defcustom godot-collapse-stream-script
+  "/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6/tools/video_to_pose_stream.py"
+  "Pose-stream Python script used by `godot-character-start-collapse'."
+  :type 'file
+  :group 'godot-camera)
+
+(defcustom godot-collapse-cache
+  "/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6/renders/mocap/girl_collapse_lean_wall_6s_final/motion_pose_frames_vertical.json"
+  "Default cached collapse motion streamed by Emacs."
+  :type 'file
+  :group 'godot-camera)
+
+(defvar godot-collapse--process nil
+  "The currently running cached collapse stream process.")
+
 (defvar godot-camera--process nil)
 (defvar godot-camera--last-response nil)
 (defvar godot-camera--program-name "emacs-camera-program")
@@ -406,6 +442,112 @@ relative handle deltas."
          type
          (cons `("controller_node" . ,godot-camera-walk-controller)
                properties)))
+
+(defun godot-character--spec ()
+  "Return the pose-stream character specification for this scene."
+  `(("node_path" . ,godot-character-node)
+    ("skeleton_path" . ,godot-character-skeleton)
+    ("controls_path" . ,godot-character-controls)))
+
+;;;###autoload
+(cl-defun godot-character-set-initial-position
+    (&key (x -0.59765434) (y 0.0549866) (z 3.245457)
+          (pitch 0.0) (yaw 0.0) (roll 0.0) rotation-degrees)
+  "Place the character and reset its pose in the Godot editor.
+
+X, Y, and Z are scene-parent coordinates.  PITCH, YAW, and ROLL are degrees
+in Godot's X/Y/Z order.  ROTATION-DEGREES, when supplied, must be a three
+number list and overrides the individual angle keywords.  This command only
+sets the initial transform; motion-stream root offsets are applied later
+relative to this position."
+  (interactive
+   (list :x (read-number "Initial X: " -0.59765434)
+         :y (read-number "Initial Y: " 0.0549866)
+         :z (read-number "Initial Z: " 3.245457)
+         :yaw (read-number "Initial yaw degrees: " 0.0)))
+  (let* ((rotation (or rotation-degrees (vector pitch yaw roll)))
+         (pose `(("mode" . "fk")
+                 ("reset_to_rest" . t)
+                 ("character_transform"
+                  ("position" . ,(vector x y z))
+                  ("rotation_degrees" . ,(vconcat rotation))))))
+    (unless (and (sequencep rotation) (= (length rotation) 3)
+                 (cl-every #'numberp rotation))
+      (user-error "rotation-degrees must contain exactly three numbers"))
+    ;; Keep this as one request so the server resets its root-motion base
+    ;; before the next external stream starts.
+    (godot-camera--send "pose.apply"
+                        `("character" . ,(godot-character--spec))
+                        `("pose" . ,pose))
+    (message "Godot character initial transform set to (%s, %s, %s)"
+             x y z)))
+
+;;;###autoload
+(cl-defun godot-character-start-collapse
+    (&key cache (position nil) (rotation-degrees nil) (reset t))
+  "Set the character start transform and stream a cached collapse.
+
+CACHE defaults to `godot-collapse-cache'.  POSITION is an optional
+`(X Y Z)' scene-parent location.  ROTATION-DEGREES is an optional `(X Y Z)'
+Euler rotation.  When RESET is non-nil, the initial transform is sent before
+the cache begins.  The cache owns the subsequent vertical root motion, so do
+not bake the starting world position into every frame."
+  (interactive
+   (list :cache (read-file-name "Collapse cache: " nil godot-collapse-cache t)
+         :position (when current-prefix-arg
+                     (list (read-number "Initial X: " -0.59765434)
+                           (read-number "Initial Y: " 0.0549866)
+                           (read-number "Initial Z: " 3.245457)))))
+  (let* ((cache-path (expand-file-name (or cache godot-collapse-cache)))
+         (location (or position '(-0.59765434 0.0549866 3.245457)))
+         (rotation (or rotation-degrees '(0.0 0.0 0.0))))
+    (unless (file-readable-p cache-path)
+      (user-error "Collapse cache is not readable: %s" cache-path))
+    (unless (and (sequencep location) (= (length location) 3)
+                 (cl-every #'numberp location))
+      (user-error "position must contain exactly three numbers"))
+    (unless (and (sequencep rotation) (= (length rotation) 3)
+                 (cl-every #'numberp rotation))
+      (user-error "rotation-degrees must contain exactly three numbers"))
+    (godot-female-walk-set-motion-source 'external-pose)
+    (when reset
+      (godot-character-set-initial-position
+       :x (nth 0 location) :y (nth 1 location) :z (nth 2 location)
+       :rotation-degrees rotation))
+    (when (process-live-p godot-collapse--process)
+      (delete-process godot-collapse--process))
+    (setq godot-collapse--process
+          (apply #'start-process
+                 "godot-collapse-stream"
+                 (get-buffer-create "*Godot Collapse Stream*")
+                 godot-collapse-python
+                 (list godot-collapse-stream-script
+                       "--stream-cache" cache-path
+                       "--host" godot-camera-host
+                       "--port" (number-to-string godot-camera-port)
+                       "--character-path" godot-character-node
+                       "--skeleton-path" godot-character-skeleton
+                       "--controls-path" godot-character-controls)))
+    (set-process-query-on-exit-flag godot-collapse--process nil)
+    (message "Started collapse stream: %s" (file-name-nondirectory cache-path))))
+
+;;;###autoload
+(defun godot-character-stop-collapse ()
+  "Stop the Emacs-launched collapse stream, if one is running."
+  (interactive)
+  (if (process-live-p godot-collapse--process)
+      (progn
+        (delete-process godot-collapse--process)
+        (setq godot-collapse--process nil)
+        (message "Stopped collapse stream"))
+    (message "No collapse stream is running")))
+
+;; Short names are convenient in shot files while the long names remain
+;; discoverable through M-x and describe-function.
+(defalias 'godot-set-character-initial-position
+  #'godot-character-set-initial-position)
+(defalias 'godot-start-collapse #'godot-character-start-collapse)
+(defalias 'godot-stop-collapse #'godot-character-stop-collapse)
 
 ;;;###autoload
 (defun godot-female-walk-play ()

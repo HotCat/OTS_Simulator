@@ -61,6 +61,44 @@ editor viewport changes without running the game and Godot replies with
 `C-c C-r` and `C-c C-t` are the separate game-preview path. They are not
 required for editor evaluation.
 
+## Place the character and start the collapse from Emacs
+
+Load `godot-camera-control.el` alongside the camera controls:
+
+```elisp
+(add-to-list
+ 'load-path
+ "/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6/tools/emacs")
+(require 'godot-camera-control)
+```
+
+`M-x godot-character-set-initial-position` sends one `pose.apply` reset with
+the character's scene-parent position and Euler rotation. It accepts the
+keywords `:x`, `:y`, `:z`, and `:rotation-degrees` for scripted shots:
+
+```elisp
+(godot-character-set-initial-position
+ :x -0.60 :y 0.055 :z 3.25
+ :rotation-degrees '(0.0 180.0 0.0))
+```
+
+`M-x godot-character-start-collapse` first selects `external_pose`, resets the
+character to the requested initial transform, and launches the configured
+`video_to_pose_stream.py` process with the collapse cache. With a prefix
+argument, the interactive command asks for the initial X/Y/Z position; without
+one it uses `godot-collapse-cache` and the default scene position:
+
+```elisp
+(godot-character-start-collapse
+ :cache "/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6/renders/mocap/girl_collapse_lean_wall_6s_final/motion_pose_frames_vertical.json"
+ :position '(-0.60 0.055 3.25)
+ :rotation-degrees '(0.0 180.0 0.0))
+```
+
+Use `M-x godot-character-stop-collapse` to stop the Emacs-launched stream.
+The initial transform is applied only once; the cache's `root_motion.positions`
+then supplies the subsequent pelvic/vertical movement relative to that start.
+
 ## Multi-actor shot documents
 
 A shot selects named poses from separate actor documents:
