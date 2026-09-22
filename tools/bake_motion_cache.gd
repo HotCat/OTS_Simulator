@@ -1,9 +1,9 @@
 extends SceneTree
 
 ## Convert a godot-pose-motion-cache JSON file into a native AnimationLibrary.
-## Bone rotations in the cache are already absolute local Godot bone poses.
-## Keeping that contract here avoids the rest-relative-delta error that twists
-## rolled thigh, wrist, foot, finger, and toe bones from frame zero.
+## Bone rotations in the cache are Skeleton3D pose rotations. New caches use
+## rest-relative local deltas (the value accepted by set_bone_pose_rotation());
+## the legacy absolute-local tag is still accepted for older walk caches.
 
 func _initialize() -> void:
 	var arguments := OS.get_cmdline_user_args()
@@ -21,8 +21,9 @@ func _initialize() -> void:
 		_fail("Motion cache is not a JSON object: %s" % cache_path)
 		return
 	var cache := parsed as Dictionary
-	if str(cache.get("rotation_space", "")) != "godot4_absolute_local_bone_pose":
-		_fail("Refusing to bake a cache that is not absolute-local bone rotation data")
+	var rotation_space := str(cache.get("rotation_space", ""))
+	if rotation_space not in ["godot4_rest_relative_local_pose", "godot4_absolute_local_bone_pose"]:
+		_fail("Refusing to bake an unsupported bone rotation space: %s" % rotation_space)
 		return
 	var frames_value = cache.get("frames", [])
 	if not frames_value is Array or frames_value.is_empty():
@@ -119,8 +120,11 @@ func _bake_root_tracks(animation: Animation, root: Dictionary,
 		local_forward = Vector3.FORWARD
 	local_forward = local_forward.normalized()
 	var origin := _trajectory_origin(str(root.get("scene_origin_node", "")))
-	if root.has("ground_y"):
-		origin.y = float(root.get("ground_y", origin.y))
+	# JSON stores an absent optional ground override as null. Godot 4.7 no
+	# longer accepts float(null), so only coerce an actual numeric override.
+	var ground_y = root.get("ground_y")
+	if ground_y is float or ground_y is int:
+		origin.y = float(ground_y)
 	if positions is Array and positions.size() == frame_count:
 		var position_track := animation.add_track(Animation.TYPE_POSITION_3D)
 		animation.track_set_path(position_track, NodePath("IK_character"))

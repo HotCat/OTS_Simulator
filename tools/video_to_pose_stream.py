@@ -583,7 +583,8 @@ def child_offset_for_bone(rig: Rig, bone_name: str) -> np.ndarray | None:
 def fit_hierarchical_pose(target: Rig, sam_globals: dict[str, np.ndarray],
                           nlf_names: list[str], positions: np.ndarray,
                           uncertainties: np.ndarray,
-                          nlf_weight: float) -> tuple[dict[str, np.ndarray], set[str]]:
+                          nlf_weight: float,
+                          confidence_floor: float = 0.0) -> tuple[dict[str, np.ndarray], set[str]]:
     """Fit target-local rotations parent-first with minimal swing corrections.
 
     Limbs inherit the already fitted parent orientation before aiming at their
@@ -595,10 +596,9 @@ def fit_hierarchical_pose(target: Rig, sam_globals: dict[str, np.ndarray],
     target_index = target.index
     frame_count = len(positions)
     identity = np.array([0.0, 0.0, 0.0, 1.0])
-    # Godot 4's set_bone_pose_rotation() expects the absolute local bone pose,
-    # not an identity-relative animation delta. Unobserved bones must therefore
-    # retain their imported GLB rest quaternion; sending identity destroys bone
-    # roll on this rig (especially thighs, wrists, fingers, feet, and toes).
+    # Keep absolute local rotations internally: the torso/IK diagnostics below
+    # evaluate FK from these transforms.  They are converted to Godot's
+    # rest-relative pose deltas only when the JSON frames are emitted.
     local_pose = {
         name: np.tile(target.rest_local[index], (frame_count, 1))
         for index, name in enumerate(target.names)
@@ -630,7 +630,8 @@ def fit_hierarchical_pose(target: Rig, sam_globals: dict[str, np.ndarray],
                                                 uncertainties[frame, end]))
                         # Trust clear joints fully and fade only genuinely weak
                         # or occluded observations.
-                        confidence = min(1.0, max(0.0, (0.35 - uncertainty) / 0.25))
+                        confidence = min(1.0, max(float(confidence_floor),
+                                                  (0.35 - uncertainty) / 0.25))
                         correction = quat_slerp(identity, swing,
                                                 min(1.0, nlf_weight * confidence))
                         fitted_global = quat_multiply(correction, fitted_global)
@@ -1377,6 +1378,7 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
                  sam_observations: Mapping[str, Any], frame_count: int,
                  fps: float, nlf_weight: float, root_motion_mode: str = "foot-contact",
                  foot_lock_strength: float = 0.85, root_motion_scale: float | None = None,
+                 nlf_confidence_floor: float = 0.0,
                  trajectory: Mapping[str, Any] | None = None,
                  trajectory_samples: int = 80, trajectory_heading: str = "tangent") -> tuple[
                      list[dict[str, list[float]]], dict[str, Any], dict[str, Any]]:
@@ -1386,6 +1388,7 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
     )
     local, driven_bones = fit_hierarchical_pose(
         target, base_globals, nlf_names, positions, uncertainties, nlf_weight,
+        nlf_confidence_floor,
     )
     contacts = infer_foot_contacts(nlf_names, positions, fps)
     root_motion, root_diagnostics = infer_root_motion(
@@ -1467,7 +1470,10 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
     frames: list[dict[str, list[float]]] = []
     for frame in range(frame_count):
         frames.append({
-            name: [round(float(value), 8) for value in filtered[name][frame]]
+            name: [round(float(value), 8) for value in quat_multiply(
+                quat_conjugate(target.rest_local[target.index[name]]),
+                filtered[name][frame],
+            )]
             for name in target.names
         })
     diagnostics = {
@@ -1655,6 +1661,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nlf-device", default="mps")
     parser.add_argument("--nlf-batch-size", type=int, default=8)
     parser.add_argument("--nlf-weight", type=float, default=1.0)
+    parser.add_argument("--nlf-confidence-floor", type=float, default=0.0,
+                        help="minimum NLF segment confidence; useful for seated/collapsed poses where ankles are occluded")
     parser.add_argument("--root-motion", choices=("off", "pelvis", "foot-contact"),
                         default="foot-contact",
                         help="parent translation source; foot-contact locks planted feet while preserving Hips wobble")
@@ -1712,6 +1720,8 @@ def validate_paths(args: argparse.Namespace) -> None:
         raise RuntimeError("--foot-lock-strength must be between 0 and 1")
     if args.root_motion_scale is not None and args.root_motion_scale <= 0.0:
         raise RuntimeError("--root-motion-scale must be positive")
+    if not 0.0 <= args.nlf_confidence_floor <= 1.0:
+        raise RuntimeError("--nlf-confidence-floor must be between 0 and 1")
     if args.trajectory is not None and not args.trajectory.is_file():
         raise RuntimeError(f"trajectory file does not exist: {args.trajectory}")
 
@@ -1776,7 +1786,7 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
     frame_data, diagnostics, root_motion = solve_motion(
         target, source, observations["nlf"], observations["sam3d"], frame_count,
         args.fps, args.nlf_weight, args.root_motion, args.foot_lock_strength,
-        args.root_motion_scale,
+        args.root_motion_scale, args.nlf_confidence_floor,
         json.loads(args.trajectory.read_text(encoding="utf-8")) if args.trajectory else None,
         args.trajectory_samples, args.trajectory_heading,
     )
@@ -1789,7 +1799,10 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
         "frame_count": frame_count,
         "bone_count": len(target.names),
         "quaternion_order": "xyzw",
-        "rotation_space": "godot4_absolute_local_bone_pose",
+        # Values are the rest-relative local pose rotations consumed by
+        # Skeleton3D.set_bone_pose_rotation().  The solver keeps absolute
+        # locals internally, then removes each GLB rest quaternion at export.
+        "rotation_space": "godot4_rest_relative_local_pose",
         "target_rig": str(args.target_glb.resolve()),
         "solver": {
             "observation_layers": ["NLF SMPL-24", "SAM 3D Body MHR-127"],
@@ -1797,6 +1810,7 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
                          "isolated outlier rejection", "bidirectional slerp",
                          "foot contact damping"],
             "nlf_weight": args.nlf_weight,
+            "nlf_confidence_floor": args.nlf_confidence_floor,
         },
         "diagnostics": diagnostics,
         "root_motion": root_motion,
