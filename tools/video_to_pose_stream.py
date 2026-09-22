@@ -1520,6 +1520,23 @@ def make_pose_frame(frame_quaternions: Mapping[str, Sequence[float]], seq: int,
                     character_path: str, skeleton_path: str, controls_path: str,
                     source_video: str, reset_to_rest: bool, ack: bool = False,
                     root_motion: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    bones: dict[str, dict[str, Any]] = {}
+    for name, value in frame_quaternions.items():
+        # Legacy caches store a bare quaternion list.  Collapse/contact-aware
+        # caches may additionally provide an absolute local bone position so
+        # the pelvis can descend while the feet remain pinned to the ground.
+        if isinstance(value, Mapping):
+            rotation = value.get("rotation_quaternion", value.get("rotation", []))
+            bone: dict[str, Any] = {
+                "rotation_quaternion": [float(item) for item in rotation]
+            }
+            if "position" in value:
+                bone["position"] = [float(item) for item in value["position"]]
+            if "weight" in value:
+                bone["weight"] = float(value["weight"])
+            bones[name] = bone
+        else:
+            bones[name] = {"rotation_quaternion": [float(item) for item in value]}
     message: dict[str, Any] = {
         "protocol": PROTOCOL_NAME,
         "version": PROTOCOL_VERSION,
@@ -1541,10 +1558,7 @@ def make_pose_frame(frame_quaternions: Mapping[str, Sequence[float]], seq: int,
         "pose": {
             "mode": "fk",
             "reset_to_rest": reset_to_rest,
-            "bones": {
-                name: {"rotation_quaternion": [float(item) for item in quaternion]}
-                for name, quaternion in frame_quaternions.items()
-            },
+            "bones": bones,
         },
     }
     if root_motion is not None:
