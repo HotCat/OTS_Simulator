@@ -36,8 +36,15 @@ const WALK_TRANSPORT_CAPABILITIES: Array[String] = [
 	"walk.restart",
 	"walk.refresh_trajectory",
 	"walk.record_camera_motion",
+	"walk.motion_source.set",
+	"walk.motion_source.status",
 	"walk.status",
 ]
+
+## Motion-source transport deliberately lives beside the legacy walk commands.
+## This keeps existing clients compatible while allowing a shot to declare
+## whether the controller owns motion (`walk_cycle`), should hold still
+## (`stationary`), or should yield to pose.frame/pose.apply (`external_pose`).
 
 signal pose_applied(message: Dictionary, response: Dictionary)
 
@@ -211,6 +218,8 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 		"walk.restart": method_name = "editor_transport_restart"
 		"walk.refresh_trajectory": method_name = "editor_transport_refresh_trajectory"
 		"walk.record_camera_motion": method_name = "editor_transport_record_camera_motion"
+		"walk.motion_source.set": method_name = "editor_transport_set_motion_source"
+		"walk.motion_source.status": method_name = "editor_transport_status"
 		"walk.status": method_name = "editor_transport_status"
 		_:
 			return {"type": "error", "error": "unsupported_walk_message_type"}
@@ -226,6 +235,9 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 		if not options_value is Dictionary:
 			return {"type": "error", "error": "walk_record_options_must_be_object"}
 		result = controller.call(method_name, options_value) as Dictionary
+	elif message_type == "walk.motion_source.set":
+		var source_value := str(message.get("source", ""))
+		result = controller.call(method_name, source_value) as Dictionary
 	else:
 		result = controller.call(method_name) as Dictionary
 	if not bool(result.get("ok", false)):
@@ -242,6 +254,8 @@ func _walk_response_type(message_type: String) -> String:
 		"walk.restart": return "walk.restarted"
 		"walk.refresh_trajectory": return "walk.trajectory_refreshed"
 		"walk.record_camera_motion": return "walk.camera_recording_toggled"
+		"walk.motion_source.set": return "walk.motion_source_set"
+		"walk.motion_source.status": return "walk.motion_source_status"
 		"walk.status": return "walk.status"
 		_: return "walk.response"
 

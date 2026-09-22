@@ -267,6 +267,35 @@ streaming frames do not generate acknowledgements unless `ack` is true.
 The localhost binding is intentional. Do not expose the raw pose port to a
 network; use an authenticated relay if remote capture is added later.
 
+## Camera capture motion ownership
+
+Camera recording is no longer coupled to the female walk evaluator. The
+`FemaleWalkController` exposes a motion-source API:
+
+- `walk_cycle` (default) seeks the authored gait and follows the trajectory;
+- `stationary` advances the capture clock but preserves the current character
+  transform and pose;
+- `external_pose` leaves pose and root ownership to `pose.apply` / `pose.frame`,
+  which is suitable for retargeted bone motion.
+
+From Emacs, use a self-contained stationary take:
+
+```elisp
+(godot-walk-record-camera-motion
+ :motion-source 'stationary
+ :auto-clip-to-camera-program t
+ :program-end-padding 0.0
+ :fps 24
+ :resolution '(1280 720)
+ :start-delay 0.1
+ :viewport 1)
+```
+
+For a retargeted stream, select `external-pose` before or as part of the
+recording request. The transport endpoints are `walk.motion_source.set` and
+`walk.motion_source.status`; status responses include the normalized source
+name under `motion_source`.
+
 ## Video motion fitting: NLF + SAM 3D Body
 
 `tools/video_to_pose_stream.py` is the external motion-capture path. It does

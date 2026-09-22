@@ -21,6 +21,16 @@ enum TravelMode {
 	IN_PLACE,
 }
 
+## Determines which system owns the character pose and root motion during a
+## preview or fixed-step camera capture.  WALK_CYCLE preserves the original
+## gait behavior; STATIONARY leaves the current pose/transform untouched;
+## EXTERNAL_POSE reserves ownership for pose.frame/pose.apply retargeting.
+enum MotionSource {
+	WALK_CYCLE,
+	STATIONARY,
+	EXTERNAL_POSE,
+}
+
 const NORMAL_ANIMATION := &"female_walk_cycle"
 const LEG_WOUNDED_ANIMATION := &"leg_wounded/female_walk_leg_wounded"
 const WOUNDED_ANIMATION := &"wounded/female_walk_wounded_terminator"
@@ -76,6 +86,11 @@ var planned_path_length_m := 24.0
 var arrange_trajectory_action: Callable = _arrange_straight_trajectory
 
 @export_group("Walk Preview")
+@export var motion_source: MotionSource = MotionSource.WALK_CYCLE:
+	set(value):
+		motion_source = value
+		if is_inside_tree():
+			_apply_preview_time(preview_time_seconds)
 @export var travel_mode: TravelMode = TravelMode.FOOT_CONTACT_SYNC:
 	set(value):
 		travel_mode = value
@@ -188,7 +203,8 @@ func _process(delta: float) -> void:
 		var path_length := _path_length()
 		var animation := _animation_player.get_animation(_active_animation_name()) \
 			if _animation_player != null else null
-		if path_length > 0.0 and _travel_distance_for_time(next_time, animation) >= path_length:
+		if motion_source == MotionSource.WALK_CYCLE and path_length > 0.0 and \
+				_travel_distance_for_time(next_time, animation) >= path_length:
 			_playing = false
 			preview_in_editor = false
 	_advancing_time = true
@@ -200,7 +216,11 @@ func _process(delta: float) -> void:
 func _play_preview() -> void:
 	_resolve_nodes()
 	_rebuild_path()
-	if _character == null or _animation_player == null or _points.size() < 2:
+	if _character == null:
+		push_warning("Motion preview needs a character node")
+		return
+	if motion_source == MotionSource.WALK_CYCLE and \
+			(_animation_player == null or _points.size() < 2):
 		push_warning("Walk preview needs the character, AnimationPlayer, and at least two trajectory markers")
 		return
 	_editor_frame_accumulator = 0.0
@@ -234,7 +254,8 @@ func _restart_preview() -> void:
 	preview_time_seconds = 0.0
 	_advancing_time = false
 	_apply_preview_time(0.0)
-	if _character != null and _animation_player != null and _points.size() >= 2:
+	if _character != null and (motion_source != MotionSource.WALK_CYCLE or \
+			(_animation_player != null and _points.size() >= 2)):
 		if _capture_fixed_step_active:
 			_capture_resume_playing = true
 			_playing = false
@@ -284,7 +305,27 @@ func editor_transport_refresh_trajectory() -> Dictionary:
 	return editor_transport_status()
 
 
+func editor_transport_set_motion_source(source_value: String = "walk_cycle") -> Dictionary:
+	var parsed := _motion_source_from_value(source_value)
+	if parsed < 0:
+		return {"ok": false, "error": "invalid_motion_source", "motion_source": source_value}
+	motion_source = parsed
+	return editor_transport_status()
+
+
+func editor_transport_set_stationary() -> Dictionary:
+	return editor_transport_set_motion_source("stationary")
+
+
+func editor_transport_set_external_pose() -> Dictionary:
+	return editor_transport_set_motion_source("external_pose")
+
+
 func editor_transport_record_camera_motion(options: Dictionary = {}) -> Dictionary:
+	if options.has("motion_source"):
+		var source_result := editor_transport_set_motion_source(str(options.get("motion_source")))
+		if not bool(source_result.get("ok", false)):
+			return source_result
 	var accepted := _record_editor_camera_motion(options)
 	var result := editor_transport_status()
 	if not accepted:
@@ -337,6 +378,7 @@ func editor_transport_status() -> Dictionary:
 		"playing": _playing,
 		"preview_in_editor": preview_in_editor,
 		"preview_time_seconds": preview_time_seconds,
+		"motion_source": _motion_source_name(),
 		"trajectory_point_count": _points.size(),
 		"trajectory_length_m": _path_length(),
 		"camera_recording_active": camera_recording_active,
@@ -821,7 +863,16 @@ func _rebuild_path() -> void:
 
 
 func _apply_preview_time(time_seconds: float) -> void:
-	if _character == null or _animation_player == null:
+	if _character == null:
+		_resolve_nodes()
+	if _character == null:
+		return
+	if motion_source != MotionSource.WALK_CYCLE:
+		# Stationary and externally retargeted modes deliberately do not seek the
+		# AnimationPlayer or alter root motion. External pose.frame/pose.apply is
+		# authoritative and the stationary source preserves the current pose.
+		return
+	if _animation_player == null:
 		_resolve_nodes()
 	if _points.size() < 2:
 		_rebuild_path()
@@ -837,6 +888,21 @@ func _apply_preview_time(time_seconds: float) -> void:
 		_apply_thigh_closure(_phase_shifted_time(time_seconds, animation), animation)
 	var travel := _travel_motion_for_time(time_seconds, animation)
 	_apply_distance(travel.x, travel.y)
+
+
+func _motion_source_name() -> String:
+	match motion_source:
+		MotionSource.STATIONARY: return "stationary"
+		MotionSource.EXTERNAL_POSE: return "external_pose"
+		_: return "walk_cycle"
+
+
+func _motion_source_from_value(value: String) -> int:
+	match value.strip_edges().to_lower().replace("-", "_"):
+		"walk", "walk_cycle", "gait": return MotionSource.WALK_CYCLE
+		"stationary", "still", "static": return MotionSource.STATIONARY
+		"external", "external_pose", "pose", "retargeted": return MotionSource.EXTERNAL_POSE
+		_: return -1
 
 
 func _path_length() -> float:

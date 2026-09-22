@@ -431,11 +431,34 @@ relative handle deltas."
   (interactive)
   (godot-walk--send "walk.refresh_trajectory"))
 
+(defun godot-walk--motion-source-name (source)
+  "Normalize SOURCE to the Godot motion-source protocol name."
+  (let ((name (cond ((symbolp source) (symbol-name source))
+                    ((stringp source) source)
+                    (t nil))))
+    (unless name
+      (user-error ":motion-source must be walk-cycle, stationary, or external-pose"))
+    (setq name (replace-regexp-in-string "-" "_" (downcase name)))
+    (pcase name
+      ((or "walk" "walk_cycle" "gait") "walk_cycle")
+      ((or "stationary" "still" "static") "stationary")
+      ((or "external" "external_pose" "pose" "retargeted") "external_pose")
+      (_ (user-error "Unknown :motion-source %s" source)))))
+
+;;;###autoload
+(defun godot-female-walk-set-motion-source (source)
+  "Set the controller's pose owner to SOURCE."
+  (interactive (list (intern (completing-read "Motion source: "
+                                               '("walk-cycle" "stationary" "external-pose")
+                                               nil t))))
+  (godot-walk--send "walk.motion_source.set"
+                    `("source" . ,(godot-walk--motion-source-name source))))
+
 ;;;###autoload
 (cl-defun godot-female-walk-record-camera-motion
     (&key duration fps resolution start-delay (keep-frames :unspecified)
           viewport (auto-clip-to-camera-program :unspecified)
-          (program-end-padding 0.0))
+          (program-end-padding 0.0) motion-source)
   "Start or stop OTS editor-camera recording with optional capture settings.
 
 DURATION is seconds, FPS is one of 12/24/30, RESOLUTION is `(WIDTH HEIGHT)',
@@ -443,6 +466,11 @@ START-DELAY is seconds, KEEP-FRAMES retains source JPEGs, and VIEWPORT is the
 human-facing 1-based editor viewport number.  AUTO-CLIP-TO-CAMERA-PROGRAM uses
 the loaded camera program's duration.  PROGRAM-END-PADDING adds a final hold;
 use zero to stop exactly at the program end, or a negative value to clip early.
+MOTION-SOURCE selects the motion owner for this take: `walk-cycle' keeps the
+legacy gait evaluator active, `stationary' freezes the current character pose
+and root transform, and `external-pose' yields pose ownership to pose.apply or
+pose.frame retargeting.  The source is sent with the recording request so a
+shot function does not depend on stale editor state.
 The symbol `camera-program' is also accepted as DURATION shorthand.  Omitting
 all options preserves the dock's current values.  Calling the function while
 recording still stops the active take."
@@ -467,6 +495,8 @@ recording still stops the active take."
     (unless (eq keep-frames :unspecified)
       (push `("keep_frames" . ,(if keep-frames t :json-false)) options))
     (when viewport (push `("viewport" . ,viewport) options))
+    (when motion-source
+      (push `("motion_source" . ,(godot-walk--motion-source-name motion-source)) options))
     (if options
         (godot-walk--send "walk.record_camera_motion"
                           `("options" . ,options))
@@ -484,6 +514,8 @@ recording still stops the active take."
 (defalias 'godot-walk-restart #'godot-female-walk-restart)
 (defalias 'godot-walk-refresh-trajectory
   #'godot-female-walk-refresh-trajectory)
+(defalias 'godot-walk-set-motion-source
+  #'godot-female-walk-set-motion-source)
 (defalias 'godot-walk-record-camera-motion
   #'godot-female-walk-record-camera-motion)
 (defalias 'godot-walk-status #'godot-female-walk-status)

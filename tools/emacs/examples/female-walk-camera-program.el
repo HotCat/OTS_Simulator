@@ -40,15 +40,12 @@
 
 
 (defun ots-female-walk-camera-shot2 ()
-  "Record a synchronized female walking camera take."
   (interactive)
 
-  ;; Establish the camera work coordinate.
   (godot-camera-confirm-follow
    :target-node "IK_character"
    :viewport 1)
 
-  ;; Build and load the camera program without starting it.
   (godot-camera-program-begin
    :name "female-walk-exhibition-hall-01"
    :target-node "IK_character"
@@ -58,33 +55,65 @@
   (godot-camera-g4 :seconds 0.5)
 
   (godot-camera-g1
-   :x -0.3561
-   :y -0.0377
-   :z 1.2961
+   :x -0.3561 :y -0.0377 :z 1.2961
    :duration 1.0
    :easing 'smooth)
 
   (godot-camera-g2-orbit
-   :degrees 360.0
+   :degrees 180.0
    :pivot '(0.0 1.2 0.0)
    :duration 7.0
    :easing 'smooth)
 
   (godot-camera-g4 :seconds 0.75)
 
+  ;; Auto-duration needs the program loaded before recording starts.
   (godot-camera-send-program :play nil)
 
-  ;; Enter fixed-step capture before either timeline starts.
   (godot-walk-record-camera-motion
-   :duration 10.0
+   :auto-clip-to-camera-program t
+   :program-end-padding 0.0
    :fps 24
    :resolution '(1280 720)
    :start-delay 0.1
-   :keep-frames nil
    :viewport 1)
 
-  ;; These are now adopted by the recorder's fixed-step clock.
-  (godot-walk-restart)
+  ;; (godot-walk-restart)
+  (godot-camera-play t))
+
+
+
+(defun ots-female-walk-camera-shot3 ()
+  (interactive)
+
+  (godot-camera-confirm-follow
+   :target-node "IK_character"
+   :viewport 1)
+
+  (godot-camera-program-begin
+   :name "female-walk-exhibition-hall-01"
+   :target-node "IK_character"
+   :viewport 1
+   :loop nil)
+
+  (godot-camera-g4 :seconds 0.5)
+
+  (godot-camera-g1 :x 5.6132 :y -1.6447 :z 0.9884
+		   :duration 4.0
+		   :easing 'smooth)
+
+  (godot-camera-g2-orbit
+   :degrees 90.0
+   :pivot '(0.0 1.2 0.0)
+   :duration 5.0
+   :easing 'smooth)
+
+  (godot-camera-g4 :seconds 0.75)
+
+  ;; Auto-duration needs the program loaded before recording starts.
+  (godot-camera-send-program :play nil)
+
+  ;; (godot-walk-restart)
   (godot-camera-play t))
 
 
@@ -104,8 +133,16 @@
   )
 
 
+(defun reset-female-character2 ()
+  (godot-camera-release-follow)
+  (godot-camera-restore-initial-view)
+  )
+
+
 (reset-female-character)
+(reset-female-character2)
 (ots-female-walk-camera-shot2)
+(ots-female-walk-camera-shot3)
 
 
 (godot-walk-status)

@@ -72,6 +72,18 @@
        (equal (cdr (assoc "controller_node" (cdr message)))
               "FemaleWalkController")))))
 
+(ert-deftest godot-walk-motion-source-normalizes-and-sends ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties)))))
+      (godot-female-walk-set-motion-source 'external-pose))
+    (should (equal (car message) "walk.motion_source.set"))
+    (should (equal (cdr (assoc "source" (cdr message))) "external_pose"))))
+
+(ert-deftest godot-walk-motion-source-rejects-invalid-value ()
+  (should-error (godot-walk--motion-source-name 'painted) :type 'user-error))
+
 (ert-deftest godot-walk-record-camera-motion-sends-video-options ()
   (let (message)
     (cl-letf (((symbol-function 'godot-camera--send)
@@ -81,7 +93,8 @@
                (lambda (value _label) (vconcat value))))
       (godot-female-walk-record-camera-motion
        :duration 8.0 :fps 24 :resolution '(1280 720)
-       :start-delay 1.5 :keep-frames t :viewport 2))
+       :start-delay 1.5 :keep-frames t :viewport 2
+       :motion-source 'stationary))
     (should (equal (car message) "walk.record_camera_motion"))
     (let* ((options (cdr (assoc "options" (cdr message))))
            (duration (cdr (assoc "duration" options)))
@@ -91,7 +104,8 @@
       (should (= fps 24))
       (should (equal (append resolution nil) '(1280 720)))
       (should (= (cdr (assoc "viewport" options)) 2))
-      (should (eq (cdr (assoc "keep_frames" options)) t)))))
+      (should (eq (cdr (assoc "keep_frames" options)) t))
+      (should (equal (cdr (assoc "motion_source" options)) "stationary")))))
 
 (ert-deftest godot-walk-record-camera-motion-auto-clips-to-program ()
   (let (message)
