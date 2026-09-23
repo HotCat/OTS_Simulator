@@ -73,8 +73,19 @@ Load `godot-camera-control.el` alongside the camera controls:
 ```
 
 `M-x godot-character-set-initial-position` sends one `pose.apply` reset with
-the character's scene-parent position and Euler rotation. It accepts the
-keywords `:x`, `:y`, `:z`, and `:rotation-degrees` for scripted shots:
+the character's scene-parent position and rotation. For a setup copied from
+the OTS Render gizmo, use one XYZ position vector and the displayed quaternion
+in XYZW order:
+
+```elisp
+(godot-character-set-initial-position
+ :position '(-0.60 0.055 3.25)
+ :quaternion '(0.0 0.7071068 0.0 0.7071068))
+```
+
+The quaternion is the canonical form: paste the four values exactly as shown
+by OTS Render. The older `:x`, `:y`, `:z`, and `:rotation-degrees` keywords
+remain available for hand-authored Euler shots:
 
 ```elisp
 (godot-character-set-initial-position
@@ -85,15 +96,21 @@ keywords `:x`, `:y`, `:z`, and `:rotation-degrees` for scripted shots:
 `M-x godot-character-start-collapse` first selects `external_pose`, resets the
 character to the requested initial transform, and launches the configured
 `video_to_pose_stream.py` process with the collapse cache. With a prefix
-argument, the interactive command asks for the initial X/Y/Z position; without
-one it uses `godot-collapse-cache` and the default scene position:
+argument, the interactive command asks for an XYZ position and optional XYZW
+quaternion; without one it uses `godot-collapse-cache` and the default scene
+position:
 
 ```elisp
 (godot-character-start-collapse
  :cache "/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6/renders/mocap/girl_collapse_lean_wall_6s_final/motion_pose_frames_vertical.json"
  :position '(-0.60 0.055 3.25)
- :rotation-degrees '(0.0 180.0 0.0))
+ :quaternion '(0.0 1.0 0.0 0.0))
 ```
+
+`godot-character-start-collapse` accepts the same `:position` and
+`:quaternion` keywords. A quaternion takes precedence over
+`:rotation-degrees`, so the transform can be copied from the dragged
+`IK_character` gizmo without converting angles manually.
 
 Use `M-x godot-character-stop-collapse` to stop the Emacs-launched stream.
 The initial transform is applied only once; the cache's `root_motion.positions`

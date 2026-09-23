@@ -85,6 +85,13 @@
 (defvar godot-collapse--process nil
   "The currently running cached collapse stream process.")
 
+(defconst godot-character-default-position
+  '(-0.59765434 0.0549866 3.245457)
+  "Default scene-parent position used by character placement commands.
+
+The value is deliberately one XYZ vector so the editor and collapse commands
+share the same setup point.  Callers can override it with `:position'.")
+
 (defvar godot-camera--process nil)
 (defvar godot-camera--last-response nil)
 (defvar godot-camera--program-name "emacs-camera-program")
@@ -451,68 +458,95 @@ relative handle deltas."
 
 ;;;###autoload
 (cl-defun godot-character-set-initial-position
-    (&key (x -0.59765434) (y 0.0549866) (z 3.245457)
+    (&key position quaternion x y z
           (pitch 0.0) (yaw 0.0) (roll 0.0) rotation-degrees)
   "Place the character and reset its pose in the Godot editor.
 
-X, Y, and Z are scene-parent coordinates.  PITCH, YAW, and ROLL are degrees
-in Godot's X/Y/Z order.  ROTATION-DEGREES, when supplied, must be a three
-number list and overrides the individual angle keywords.  This command only
-sets the initial transform; motion-stream root offsets are applied later
+POSITION is one scene-parent XYZ vector, for example `'(0.0 0.055 3.25)'.
+QUATERNION is the exact OTS Render gizmo orientation in Godot's XYZW order,
+`'(x y z w)'.  It can be pasted directly from the transform readout and is
+preferred over Euler angles.  For compatibility, separate X/Y/Z keywords and
+the legacy PITCH/YAW/ROLL or ROTATION-DEGREES form are still accepted.  A
+supplied QUATERNION takes precedence over all Euler arguments.  This command
+only sets the initial transform; motion-stream root offsets are applied later
 relative to this position."
   (interactive
-   (list :x (read-number "Initial X: " -0.59765434)
-         :y (read-number "Initial Y: " 0.0549866)
-         :z (read-number "Initial Z: " 3.245457)
-         :yaw (read-number "Initial yaw degrees: " 0.0)))
-  (let* ((rotation (or rotation-degrees (vector pitch yaw roll)))
-         (pose `(("mode" . "fk")
-                 ("reset_to_rest" . t)
-                 ("character_transform"
-                  ("position" . ,(vector x y z))
-                  ("rotation_degrees" . ,(vconcat rotation))))))
-    (unless (and (sequencep rotation) (= (length rotation) 3)
-                 (cl-every #'numberp rotation))
+   (list :position
+         (read--expression
+          (format "Initial position (X Y Z) [%s]: "
+                  (mapconcat #'number-to-string godot-character-default-position " ")))
+         :quaternion
+         (read--expression
+          "Initial quaternion (X Y Z W), or nil for Euler degrees: ")))
+  (let* ((resolved-position
+          (or position
+              (list (or x (nth 0 godot-character-default-position))
+                    (or y (nth 1 godot-character-default-position))
+                    (or z (nth 2 godot-character-default-position)))))
+         (resolved-euler (or rotation-degrees (vector pitch yaw roll))))
+    (unless (and (sequencep resolved-position) (= (length resolved-position) 3)
+                 (cl-every #'numberp resolved-position))
+      (user-error "position must contain exactly three numbers"))
+    (when quaternion
+      (setq quaternion (godot-camera--vector4 quaternion "quaternion")))
+    (unless (or quaternion
+                (and (sequencep resolved-euler) (= (length resolved-euler) 3)
+                     (cl-every #'numberp resolved-euler)))
       (user-error "rotation-degrees must contain exactly three numbers"))
-    ;; Keep this as one request so the server resets its root-motion base
-    ;; before the next external stream starts.
-    (godot-camera--send "pose.apply"
-                        `("character" . ,(godot-character--spec))
-                        `("pose" . ,pose))
-    (message "Godot character initial transform set to (%s, %s, %s)"
-             x y z)))
+    (let ((transform `(("position" . ,(vconcat resolved-position)))))
+      (if quaternion
+          ;; The receiver expects [x, y, z, w], exactly as shown by OTS Render.
+          (push (cons "rotation_quaternion" quaternion) transform)
+        (push (cons "rotation_degrees" (vconcat resolved-euler)) transform))
+      (let ((pose `(("mode" . "fk")
+                    ("reset_to_rest" . t)
+                    ("character_transform" . ,(nreverse transform)))))
+        ;; Keep this as one request so the server resets its root-motion base
+        ;; before the next external stream starts.
+        (godot-camera--send "pose.apply"
+                            `("character" . ,(godot-character--spec))
+                            `("pose" . ,pose))
+        (message "Godot character initial transform set to position %S%s"
+                 resolved-position
+                 (if quaternion " with quaternion XYZW" ""))))))
 
 ;;;###autoload
 (cl-defun godot-character-start-collapse
-    (&key cache (position nil) (rotation-degrees nil) (reset t))
+    (&key cache (position nil) (quaternion nil) (rotation-degrees nil)
+          (reset t))
   "Set the character start transform and stream a cached collapse.
 
-CACHE defaults to `godot-collapse-cache'.  POSITION is an optional
-`(X Y Z)' scene-parent location.  ROTATION-DEGREES is an optional `(X Y Z)'
-Euler rotation.  When RESET is non-nil, the initial transform is sent before
-the cache begins.  The cache owns the subsequent vertical root motion, so do
-not bake the starting world position into every frame."
+CACHE defaults to `godot-collapse-cache'.  POSITION is an optional `(X Y Z)'
+scene-parent location.  QUATERNION is an optional OTS Render `(X Y Z W)'
+orientation and takes precedence over ROTATION-DEGREES, an optional `(X Y Z)'
+Euler rotation retained for compatibility.  When RESET is non-nil, the initial
+transform is sent before the cache begins.  The cache owns the subsequent
+vertical root motion, so do not bake the starting world position into every
+frame."
   (interactive
    (list :cache (read-file-name "Collapse cache: " nil godot-collapse-cache t)
          :position (when current-prefix-arg
-                     (list (read-number "Initial X: " -0.59765434)
-                           (read-number "Initial Y: " 0.0549866)
-                           (read-number "Initial Z: " 3.245457)))))
+                     (read--expression "Initial position (X Y Z): "))
+         :quaternion (when current-prefix-arg
+                       (read--expression
+                        "Initial quaternion (X Y Z W), or nil: "))))
   (let* ((cache-path (expand-file-name (or cache godot-collapse-cache)))
-         (location (or position '(-0.59765434 0.0549866 3.245457)))
+         (location (or position godot-character-default-position))
          (rotation (or rotation-degrees '(0.0 0.0 0.0))))
     (unless (file-readable-p cache-path)
       (user-error "Collapse cache is not readable: %s" cache-path))
     (unless (and (sequencep location) (= (length location) 3)
                  (cl-every #'numberp location))
       (user-error "position must contain exactly three numbers"))
-    (unless (and (sequencep rotation) (= (length rotation) 3)
-                 (cl-every #'numberp rotation))
+    (unless (or quaternion
+                (and (sequencep rotation) (= (length rotation) 3)
+                     (cl-every #'numberp rotation)))
       (user-error "rotation-degrees must contain exactly three numbers"))
     (godot-female-walk-set-motion-source 'external-pose)
     (when reset
       (godot-character-set-initial-position
-       :x (nth 0 location) :y (nth 1 location) :z (nth 2 location)
+       :position location
+       :quaternion quaternion
        :rotation-degrees rotation))
     (when (process-live-p godot-collapse--process)
       (delete-process godot-collapse--process))
