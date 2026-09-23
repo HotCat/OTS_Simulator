@@ -114,6 +114,28 @@
 (ert-deftest godot-walk-motion-source-rejects-invalid-value ()
   (should-error (godot-walk--motion-source-name 'painted) :type 'user-error))
 
+(ert-deftest godot-character-play-collapse-sends-native-current-transform-command ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties)))))
+      (godot-character-play-collapse))
+    (should (equal (car message) "walk.collapse.play"))
+    (should (equal (cdr (assoc "controller_node" (cdr message)))
+                   "FemaleWalkController"))
+    (should (equal (cdr (assoc "animation" (cdr message)))
+                   "collapse_short/female_collapse_motion_0_3_68"))))
+
+(ert-deftest godot-character-stop-collapse-animation-sends-stop-command ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties)))))
+      (godot-character-stop-collapse-animation))
+    (should (equal (car message) "walk.collapse.stop"))
+    (should (equal (cdr (assoc "controller_node" (cdr message)))
+                   "FemaleWalkController"))))
+
 (ert-deftest godot-walk-record-camera-motion-sends-video-options ()
   (let (message)
     (cl-letf (((symbol-function 'godot-camera--send)
@@ -147,6 +169,7 @@
     (let ((options (cdr (assoc "options" (cdr message)))))
       (should (eq (cdr (assoc "auto_clip_to_camera_program" options)) t))
       (should (= (cdr (assoc "program_end_padding" options)) 0.25))
+      (should (eq (cdr (assoc "auto_resolution" options)) t))
       (should-not (assoc "duration" options)))))
 
 ;;; test-godot-camera-control.el ends here

@@ -28,12 +28,13 @@ func _initialize() -> void:
 	var skeleton := scene.get_node("IK_character/Skeleton3D") as Skeleton3D
 	var cache := JSON.parse_string(FileAccess.get_file_as_string(INPUT_CACHE)) as Dictionary
 	var frames: Array = cache["frames"]
+	var rotation_space := str(cache.get("rotation_space", "godot4_rest_relative_local_pose"))
 	var root_positions: Array = cache["root_motion"]["positions"]
 	var largest_correction := 0.0
 
 	for frame_index in frames.size():
 		skeleton.reset_bone_poses()
-		_apply_frame(skeleton, frames[frame_index] as Dictionary)
+		_apply_frame(skeleton, frames[frame_index] as Dictionary, rotation_space)
 		var root_offset: Array = root_positions[frame_index]
 		character.position = BASE_CHARACTER_POSITION + Vector3(
 			float(root_offset[0]), float(root_offset[1]), float(root_offset[2]))
@@ -69,7 +70,7 @@ func _initialize() -> void:
 	print("LARGEST_SUPPORT_CORRECTION ", largest_correction)
 	quit(0)
 
-func _apply_frame(skeleton: Skeleton3D, frame: Dictionary) -> void:
+func _apply_frame(skeleton: Skeleton3D, frame: Dictionary, rotation_space: String) -> void:
 	for bone_name in frame:
 		var bone_index := skeleton.find_bone(str(bone_name))
 		if bone_index < 0:
@@ -80,9 +81,12 @@ func _apply_frame(skeleton: Skeleton3D, frame: Dictionary) -> void:
 			var position: Array = value["position"]
 			skeleton.set_bone_pose_position(bone_index, Vector3(
 				float(position[0]), float(position[1]), float(position[2])))
-		skeleton.set_bone_pose_rotation(bone_index, Quaternion(
+		var rotation := Quaternion(
 			float(quaternion[0]), float(quaternion[1]),
-			float(quaternion[2]), float(quaternion[3])))
+			float(quaternion[2]), float(quaternion[3]))
+		if rotation_space == "godot4_absolute_local_bone_pose":
+			rotation = (skeleton.get_bone_rest(bone_index).basis.get_rotation_quaternion().inverse() * rotation).normalized()
+		skeleton.set_bone_pose_rotation(bone_index, rotation)
 
 func _median_bone_y(skeleton: Skeleton3D, bone_names: Array) -> float:
 	var heights: Array[float] = []

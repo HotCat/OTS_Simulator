@@ -74,7 +74,6 @@
    :auto-clip-to-camera-program t
    :program-end-padding 0.0
    :fps 24
-   :resolution '(1280 720)
    :start-delay 0.1
    :viewport 1)
 
@@ -112,6 +111,15 @@
 
   ;; Auto-duration needs the program loaded before recording starts.
   (godot-camera-send-program :play nil)
+
+
+  (godot-walk-record-camera-motion
+   :motion-source 'stationary
+   :auto-clip-to-camera-program t
+   :program-end-padding 0.0
+   :fps 24
+   :start-delay 0.1
+   :viewport 1)
 
   ;; (godot-walk-restart)
   (godot-camera-play t))
@@ -157,3 +165,82 @@
 (godot-walk-record-camera-motion)
 
 (godot-camera-release-follow)
+
+
+
+(godot-camera-set-initial-view :position '(-1.587332 4.953933 8.858178) :quaternion '(-0.248334482 -0.013592960 -0.001011713 0.968578458))
+
+
+(godot-character-set-initial-position :position '(-1.587332 4.953933 8.858178) :quaternion '(-0.248334482 -0.013592960 -0.001011713 0.968578458))
+
+I need a button to copy the :position and :quaternion of the current posed IK_character
+
+
+
+(godot-character-stop-collapse-animation)
+
+(godot-character-play-collapse
+ :animation "collapse/female_collapse_motion")
+
+
+(godot-character-play-collapse)
+
+
+
+
+
+I also notice that the character rotate to the collapse initial position, that is means that the character does not collapse at current postion and orientation
+
+
+
+
+(defun female-collapse-camera-shot ()
+  (interactive)
+
+  (godot-camera-confirm-follow
+   :target-node "IK_character"
+   :viewport 1)
+
+  (godot-camera-program-begin
+   :name "female-walk-exhibition-hall-01"
+   :target-node "IK_character"
+   :viewport 1
+   :loop nil)
+
+  (godot-camera-g4 :seconds 5.0)
+
+  ;; (godot-camera-g1 :x 0.1831 :y -1.5150 :z 0.4186
+  ;; 		   :duration 4.0
+  ;; 		   :easing 'smooth)
+
+  ;; (godot-camera-g3-orbit :degrees 15.88 :pivot '(-2.6143 0.0000 2.4228)
+  ;; 			 :duration 5.0
+  ;; 			 :easing 'smooth)
+
+  (godot-camera-g4 :seconds 0.75)
+
+  ;; Auto-duration needs the program loaded before recording starts.
+  (godot-camera-send-program :play nil)
+
+  (godot-character-play-collapse)
+
+
+  ;; Record the complete camera program.  The native collapse clock is
+  ;; advanced by the same fixed-step capture path, while `stationary' keeps
+  ;; the legacy walk evaluator from taking ownership of IK_character.
+  (godot-walk-record-camera-motion
+   :motion-source 'stationary
+   :auto-clip-to-camera-program t
+   :program-end-padding 0.0
+   :fps 24
+   :start-delay 0.1
+   :viewport 1)
+
+
+
+  (godot-camera-play t))
+
+
+(godot-camera-release-follow)
+
+(godot-character-play-collapse)

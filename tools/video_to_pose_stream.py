@@ -1469,11 +1469,13 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
     segment_errors = measure_segment_errors(target, filtered, nlf_names, positions)
     frames: list[dict[str, list[float]]] = []
     for frame in range(frame_count):
+        # Godot's Skeleton3D pose setter and AnimationPlayer rotation tracks
+        # consume the absolute local rotation in parent space.  The solver's
+        # `filtered` values already have that target-rig basis; removing the
+        # rest quaternion here produces a delta and destroys imported bone
+        # roll when the cache is replayed or baked.
         frames.append({
-            name: [round(float(value), 8) for value in quat_multiply(
-                quat_conjugate(target.rest_local[target.index[name]]),
-                filtered[name][frame],
-            )]
+            name: [round(float(value), 8) for value in filtered[name][frame]]
             for name in target.names
         })
     diagnostics = {
@@ -1519,7 +1521,8 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
 def make_pose_frame(frame_quaternions: Mapping[str, Sequence[float]], seq: int,
                     character_path: str, skeleton_path: str, controls_path: str,
                     source_video: str, reset_to_rest: bool, ack: bool = False,
-                    root_motion: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                    root_motion: Mapping[str, Any] | None = None,
+                    rotation_space: str = "godot4_rest_relative_local_pose") -> dict[str, Any]:
     bones: dict[str, dict[str, Any]] = {}
     for name, value in frame_quaternions.items():
         # Legacy caches store a bare quaternion list.  Collapse/contact-aware
@@ -1558,6 +1561,7 @@ def make_pose_frame(frame_quaternions: Mapping[str, Sequence[float]], seq: int,
         "pose": {
             "mode": "fk",
             "reset_to_rest": reset_to_rest,
+            "rotation_space": rotation_space,
             "bones": bones,
         },
     }
@@ -1609,6 +1613,7 @@ def stream_motion(motion: Mapping[str, Any], host: str, port: int, loop: bool,
     frames = motion["frames"]
     fps = float(motion["fps"])
     source_video = str(motion["source_video"])
+    rotation_space = str(motion.get("rotation_space", "godot4_rest_relative_local_pose"))
     root_data = motion.get("root_motion", {})
     root_positions = root_data.get("positions", []) if isinstance(root_data, Mapping) else []
     root_yaw = root_data.get("rotation_y", []) if isinstance(root_data, Mapping) else []
@@ -1630,6 +1635,7 @@ def stream_motion(motion: Mapping[str, Any], host: str, port: int, loop: bool,
                     quaternions, seq, character_path, skeleton_path, controls_path,
                     source_video, reset_to_rest=(index == 0),
                     ack=(index == len(frames) - 1 and not loop),
+                    rotation_space=rotation_space,
                     root_motion=(
                         {
                             "position": root_positions[index],
@@ -1813,10 +1819,9 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
         "frame_count": frame_count,
         "bone_count": len(target.names),
         "quaternion_order": "xyzw",
-        # Values are the rest-relative local pose rotations consumed by
-        # Skeleton3D.set_bone_pose_rotation().  The solver keeps absolute
-        # locals internally, then removes each GLB rest quaternion at export.
-        "rotation_space": "godot4_rest_relative_local_pose",
+        # Values are absolute local rotations in the target GLB/Godot parent
+        # space, matching Skeleton3D.set_bone_pose_rotation().
+        "rotation_space": "godot4_absolute_local_bone_pose",
         "target_rig": str(args.target_glb.resolve()),
         "solver": {
             "observation_layers": ["NLF SMPL-24", "SAM 3D Body MHR-127"],

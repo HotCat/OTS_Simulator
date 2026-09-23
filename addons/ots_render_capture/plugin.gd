@@ -54,6 +54,7 @@ var _capture_scheduled := false
 var _video_recording := false
 var _video_capture_scheduled := false
 var _video_cancel_requested := false
+var _auto_video_resolution := false
 var _recording_walk_controller: Node
 var _recording_walk_was_playing := false
 var _recording_fixed_step_active := false
@@ -718,7 +719,7 @@ func _camera_measurement_character() -> Node3D:
 func _camera_relative_transform() -> Transform3D:
 	var character := _camera_measurement_character()
 	var camera := _current_editor_camera()
-	if character == null or camera == null:
+	if character == null or not character.is_inside_tree() or camera == null or not camera.is_inside_tree():
 		return Transform3D.IDENTITY
 	return character.global_transform.affine_inverse() * camera.global_transform
 
@@ -728,7 +729,7 @@ func _update_camera_coordinate_panel() -> void:
 		return
 	var character := _camera_measurement_character()
 	var camera := _current_editor_camera()
-	if character == null or camera == null:
+	if character == null or not character.is_inside_tree() or camera == null or not camera.is_inside_tree():
 		_camera_coordinate_status.text = "Open a 3D scene and select an editor viewport."
 		_camera_coordinate_values.text = "Position: unavailable"
 		_camera_orbit_status.text = "Create the pivot marker after opening the scene."
@@ -757,7 +758,8 @@ func _update_orbit_measurement(camera_relative: Transform3D) -> void:
 	var character := _camera_measurement_character()
 	if not is_instance_valid(_orbit_reference) and character != null:
 		_orbit_reference = character.get_node_or_null(NodePath(CAMERA_REFERENCE_NAME)) as Marker3D
-	if character == null or not is_instance_valid(_orbit_reference):
+	if character == null or not character.is_inside_tree() or \
+			not is_instance_valid(_orbit_reference) or not _orbit_reference.is_inside_tree():
 		_camera_orbit_status.text = "Create / select the pivot marker to measure orbit."
 		_camera_orbit_values.text = "Pivot: unavailable"
 		return
@@ -985,7 +987,7 @@ func _capture_current_editor_camera() -> void:
 	var capture_camera := Camera3D.new()
 	capture_camera.name = "OTSEditorCameraCopy"
 	capture_viewport.add_child(capture_camera)
-	_copy_camera(editor_camera, capture_camera)
+	_copy_camera(editor_camera, capture_camera, Vector2(resolution))
 	capture_camera.current = true
 	var depth_range := _calculate_depth_range(capture_camera, geometry)
 
@@ -1113,6 +1115,8 @@ func _apply_video_options(options: Dictionary) -> void:
 	"""
 	if options.is_empty():
 		return
+	if options.has("auto_resolution"):
+		_auto_video_resolution = bool(options.get("auto_resolution"))
 	if options.has("duration") and is_instance_valid(_video_duration):
 		_video_duration.value = clampf(float(options.get("duration")), _video_duration.min_value, _video_duration.max_value)
 	if options.has("auto_clip_to_camera_program") and is_instance_valid(_use_camera_program_duration):
@@ -1134,6 +1138,7 @@ func _apply_video_options(options: Dictionary) -> void:
 				_video_fps_choice.select(index)
 				break
 	if (options.has("resolution") or (options.has("width") and options.has("height"))) and is_instance_valid(_resolution_choice):
+		_auto_video_resolution = false
 		var resolution_value = options.get("resolution", null)
 		var requested_size := Vector2i.ZERO
 		if resolution_value is Array and (resolution_value as Array).size() >= 2:
@@ -1182,7 +1187,7 @@ func _record_editor_camera_video() -> void:
 		_finish_video_with_error("FFmpeg was not found. Install it with `brew install ffmpeg`, then retry.")
 		return
 
-	var resolution := RESOLUTIONS[_resolution_choice.get_selected_id()]
+	var resolution := _video_resolution_for_viewport(editor_viewport)
 	var fps := VIDEO_FRAME_RATES[_video_fps_choice.get_selected_id()]
 	var start_delay := float(_video_start_delay.value)
 	var timestamp := Time.get_datetime_string_from_system().replace(":", "-")
@@ -1228,7 +1233,7 @@ func _record_editor_camera_video() -> void:
 	var capture_camera := Camera3D.new()
 	capture_camera.name = "OTSVideoEditorCameraCopy"
 	capture_viewport.add_child(capture_camera)
-	_copy_camera(editor_camera, capture_camera)
+	_copy_camera(editor_camera, capture_camera, Vector2(resolution))
 	capture_camera.current = true
 
 	var delay_deadline_usec := Time.get_ticks_usec() + int(start_delay * 1000000.0)
@@ -1273,7 +1278,7 @@ func _record_editor_camera_video() -> void:
 			break
 
 		_sync_live_capture_state(live_scene_bindings)
-		_copy_camera(editor_camera, capture_camera)
+		_copy_camera(editor_camera, capture_camera, Vector2(resolution))
 		var timing_sample := _serialize_camera_sample(capture_camera, frame_index, fps)
 		if is_instance_valid(_recording_walk_controller):
 			timing_sample["walk_time_seconds"] = float(
@@ -1454,11 +1459,13 @@ func _end_fixed_step_capture() -> void:
 	_recording_camera_program_was_playing = false
 
 
-func _copy_camera(source: Camera3D, destination: Camera3D) -> void:
+func _copy_camera(
+		source: Camera3D,
+		destination: Camera3D,
+		output_size: Vector2 = Vector2.ZERO
+	) -> void:
 	destination.global_transform = source.global_transform
 	destination.projection = source.projection
-	destination.keep_aspect = source.keep_aspect
-	destination.fov = source.fov
 	destination.size = source.size
 	destination.near = source.near
 	destination.far = source.far
@@ -1467,6 +1474,39 @@ func _copy_camera(source: Camera3D, destination: Camera3D) -> void:
 	destination.v_offset = source.v_offset
 	destination.cull_mask = source.cull_mask
 	destination.attributes = source.attributes
+	if source.projection != Camera3D.PROJECTION_PERSPECTIVE or output_size.x <= 1.0 or output_size.y <= 1.0:
+		destination.keep_aspect = source.keep_aspect
+		destination.fov = source.fov
+		return
+	# The editor viewport and the output SubViewport usually have different
+	# aspect ratios. Copying Camera3D.fov verbatim then changes the horizontal
+	# framing, which is especially obvious when the editor is a tall docked
+	# viewport and the video is 16:9. Read the source projection matrix and
+	# preserve its horizontal field of view in the output camera. This keeps the
+	# shot's left/right composition identical; the output resolution determines
+	# only the new vertical extent.
+	var source_projection := source.get_camera_projection()
+	var source_m00 := absf(source_projection.x.x)
+	if source_m00 <= 0.000001:
+		destination.keep_aspect = source.keep_aspect
+		destination.fov = source.fov
+		return
+	var horizontal_fov := rad_to_deg(2.0 * atan(1.0 / source_m00))
+	destination.keep_aspect = Camera3D.KEEP_WIDTH
+	destination.fov = clampf(horizontal_fov, 1.0, 179.0)
+
+
+func _video_resolution_for_viewport(editor_viewport: SubViewport) -> Vector2i:
+	if not _auto_video_resolution:
+		return RESOLUTIONS[_resolution_choice.get_selected_id()]
+	var viewport_size := Vector2i(editor_viewport.size)
+	if viewport_size.x <= 1 or viewport_size.y <= 1:
+		viewport_size = Vector2i(editor_viewport.get_visible_rect().size)
+	# H.264/YUV420 requires even dimensions. Preserve the viewport's actual
+	# aspect ratio and only round each dimension down by at most one pixel.
+	viewport_size.x = maxi(2, viewport_size.x - viewport_size.x % 2)
+	viewport_size.y = maxi(2, viewport_size.y - viewport_size.y % 2)
+	return viewport_size
 
 
 func _duplicate_scene_snapshot(source: Node) -> Node:

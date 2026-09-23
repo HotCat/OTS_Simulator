@@ -41,6 +41,9 @@ const NORMAL_MOTION_CACHE := "res://renders/mocap/6aaba7_walk_bezier/female_walk
 const LEG_WOUNDED_MOTION_CACHE := "res://renders/mocap/6aaba7_walk_bezier/female_walk_leg_wounded.json"
 const WOUNDED_MOTION_CACHE := "res://renders/mocap/6aaba7_walk_bezier/female_walk_wounded_terminator.json"
 const CAPTURE_SERVICE_GROUP := &"ots_render_capture_service"
+const CURRENT_TRANSFORM_COLLAPSE_LIBRARY := &"collapse_current_transform"
+const DEFAULT_COLLAPSE_ANIMATION := "collapse_short/female_collapse_motion_0_3_68"
+const DEFAULT_COLLAPSE_ANIMATION_LIBRARY_PATH := "res://animations/female_collapse_motion_0_3_68.tres"
 
 @export_group("Scene References")
 @export var character_path := NodePath("../IK_character")
@@ -156,6 +159,9 @@ var _animation_player: AnimationPlayer
 var _points: Array[Vector3] = []
 var _cumulative := PackedFloat32Array()
 var _playing := false
+var _collapse_playing := false
+var _collapse_elapsed_seconds := 0.0
+var _collapse_animation_name := ""
 var _advancing_time := false
 var _editor_frame_accumulator := 0.0
 var _pace_profiles: Dictionary = {}
@@ -178,6 +184,13 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	if _collapse_playing:
+		# AnimationPlayer does not reliably receive editor-scene process ticks
+		# after a tool script calls play(). Advance the native clip explicitly.
+		if _capture_fixed_step_active:
+			return
+		_advance_collapse(delta)
+		return
 	# The recorder owns time while fixed-step capture is active. Transport
 	# commands may arrive after recording was requested; never allow them to
 	# re-enable the ordinary wall-clock evaluator during that take.
@@ -321,6 +334,143 @@ func editor_transport_set_external_pose() -> Dictionary:
 	return editor_transport_set_motion_source("external_pose")
 
 
+func editor_transport_play_collapse(
+		animation_name: String = DEFAULT_COLLAPSE_ANIMATION
+	) -> Dictionary:
+	"""Play a collapse clip rebased to the character's current transform.
+
+	The baked clip contains an `IK_character` position track authored for the
+	source scene. Before playback, duplicate that animation and offset every
+	root-position key by the difference between its first key and the current
+	character position. The clip's `Skeleton3D:Root` track is similarly rebased
+	from its authored first quaternion to the live root-bone pose, while the
+	character node quaternion is restored after playback starts. The temporary
+	library also lets this command work repeatedly without modifying the
+	imported clip.
+	"""
+	_resolve_nodes()
+	if _character == null or _animation_player == null:
+		return {"ok": false, "error": "collapse_animation_nodes_missing"}
+	var current_character_position := _character.position
+	var current_character_rotation := _character.quaternion.normalized()
+	var source_animation: Animation = null
+	if animation_name == DEFAULT_COLLAPSE_ANIMATION and not _animation_player.has_animation(StringName(animation_name)):
+		# Keep the command self-contained for scenes that predate the clipped
+		# library mapping, or for an editor session that has a stale/incomplete
+		# mapping left over from an earlier script reload. Replace that mapping
+		# only when the requested entry is actually missing.
+		var clipped_library := load(DEFAULT_COLLAPSE_ANIMATION_LIBRARY_PATH) as AnimationLibrary
+		if clipped_library != null and clipped_library.has_animation(&"female_collapse_motion_0_3_68"):
+			if _animation_player.has_animation_library(&"collapse_short"):
+				_animation_player.remove_animation_library(&"collapse_short")
+			_animation_player.add_animation_library(&"collapse_short", clipped_library)
+	if _animation_player.has_animation(StringName(animation_name)):
+		source_animation = _animation_player.get_animation(StringName(animation_name))
+	else:
+		source_animation = null
+	if source_animation == null:
+		return {
+			"ok": false,
+			"error": "collapse_animation_not_found",
+			"animation": animation_name,
+		}
+	var rebased := source_animation.duplicate(true) as Animation
+	var root_track_found := false
+	var root_position_offset := Vector3.ZERO
+	var root_rotation_rebased := false
+	var root_rotation_delta := Quaternion.IDENTITY
+	var target_path := NodePath(str(_character.name))
+	var skeleton_path := NodePath("%s/Skeleton3D:Root" % _character.name)
+	var skeleton := _skeleton
+	var current_root_rotation := Quaternion.IDENTITY
+	if skeleton != null:
+		var root_index := skeleton.find_bone("Root")
+		if root_index >= 0:
+			current_root_rotation = skeleton.get_bone_pose_rotation(root_index).normalized()
+	for track_index in rebased.get_track_count():
+		if rebased.track_get_type(track_index) == Animation.TYPE_ROTATION_3D and \
+				rebased.track_get_path(track_index) == skeleton_path:
+			var rotation_key_count := rebased.track_get_key_count(track_index)
+			if rotation_key_count > 0:
+				var authored_root_rotation := (rebased.track_get_key_value(track_index, 0) as Quaternion).normalized()
+				root_rotation_delta = (current_root_rotation * authored_root_rotation.inverse()).normalized()
+				for key_index in rotation_key_count:
+					var authored_rotation := rebased.track_get_key_value(track_index, key_index) as Quaternion
+					rebased.track_set_key_value(
+						track_index, key_index,
+						(root_rotation_delta * authored_rotation).normalized(),
+					)
+				root_rotation_rebased = true
+			continue
+		if rebased.track_get_type(track_index) != Animation.TYPE_POSITION_3D or \
+				rebased.track_get_path(track_index) != target_path:
+			continue
+		var key_count := rebased.track_get_key_count(track_index)
+		if key_count == 0:
+			continue
+		var first_position := rebased.track_get_key_value(track_index, 0) as Vector3
+		root_position_offset = current_character_position - first_position
+		for key_index in key_count:
+			var authored_position := rebased.track_get_key_value(track_index, key_index) as Vector3
+			rebased.track_set_key_value(track_index, key_index, authored_position + root_position_offset)
+		root_track_found = true
+		break
+	if _animation_player.has_animation_library(CURRENT_TRANSFORM_COLLAPSE_LIBRARY):
+		_animation_player.remove_animation_library(CURRENT_TRANSFORM_COLLAPSE_LIBRARY)
+	var library := AnimationLibrary.new()
+	var add_error := library.add_animation(&"female_collapse_motion", rebased)
+	if add_error != OK:
+		return {"ok": false, "error": "collapse_animation_library_add_failed", "code": add_error}
+	_animation_player.add_animation_library(CURRENT_TRANSFORM_COLLAPSE_LIBRARY, library)
+	motion_source = MotionSource.EXTERNAL_POSE
+	_playing = false
+	preview_in_editor = false
+	_editor_frame_accumulator = 0.0
+	# Detach any walk/preview clip before switching libraries. This prevents a
+	# previously assigned animation from writing one stale transform during the
+	# same editor tick in which the collapse command is received.
+	_animation_player.stop()
+	_collapse_animation_name = "%s/female_collapse_motion" % CURRENT_TRANSFORM_COLLAPSE_LIBRARY
+	_collapse_elapsed_seconds = 0.0
+	_collapse_playing = true
+	_animation_player.play(_collapse_animation_name)
+	_animation_player.seek(0.0, true)
+	_animation_player.advance(0.0)
+	# Explicitly restore the captured transform so AnimatableBody3D/physics
+	# synchronization or a previous preview cannot change the requested starting
+	# orientation between command receipt and the first animation evaluation.
+	_character.position = current_character_position
+	_character.quaternion = current_character_rotation
+	var result := editor_transport_status()
+	result["collapse_animation"] = animation_name
+	result["collapse_duration_seconds"] = rebased.length
+	result["root_position_rebased"] = root_track_found
+	result["root_position_offset"] = [
+		root_position_offset.x, root_position_offset.y, root_position_offset.z,
+	]
+	result["root_rotation_rebased"] = root_rotation_rebased
+	result["root_rotation_delta"] = [
+		root_rotation_delta.x, root_rotation_delta.y,
+		root_rotation_delta.z, root_rotation_delta.w,
+	]
+	return result
+
+
+func editor_transport_stop_collapse() -> Dictionary:
+	"""Stop the native collapse playback while leaving the current pose visible."""
+	_resolve_nodes()
+	_collapse_playing = false
+	_collapse_elapsed_seconds = 0.0
+	_collapse_animation_name = ""
+	if _animation_player != null:
+		# Godot's default stop() restores the animation's initial pose. Keep the
+		# currently evaluated seated pose when the user explicitly stops.
+		_animation_player.stop(true)
+	_playing = false
+	preview_in_editor = false
+	return editor_transport_status()
+
+
 func editor_transport_record_camera_motion(options: Dictionary = {}) -> Dictionary:
 	if options.has("motion_source"):
 		var source_result := editor_transport_set_motion_source(str(options.get("motion_source")))
@@ -353,6 +503,9 @@ func editor_capture_step_fixed(delta_seconds: float) -> Dictionary:
 	if step <= 0.0:
 		return editor_transport_status()
 	_resolve_nodes()
+	if _collapse_playing:
+		_advance_collapse(step)
+		return editor_transport_status()
 	_advancing_time = true
 	preview_time_seconds += step
 	_advancing_time = false
@@ -383,7 +536,30 @@ func editor_transport_status() -> Dictionary:
 		"trajectory_length_m": _path_length(),
 		"camera_recording_active": camera_recording_active,
 		"camera_recording_status": camera_recording_status,
+		"collapse_playing": _collapse_playing,
+		"collapse_elapsed_seconds": _collapse_elapsed_seconds,
 	}
+
+
+func _advance_collapse(delta_seconds: float) -> void:
+	if not _collapse_playing or _animation_player == null:
+		return
+	var animation := _animation_player.get_animation(_collapse_animation_name)
+	if animation == null:
+		_collapse_playing = false
+		return
+	var step := maxf(0.0, delta_seconds)
+	if step > 0.0:
+		_collapse_elapsed_seconds = minf(_collapse_elapsed_seconds + step, animation.length)
+		_animation_player.advance(step)
+	if _collapse_elapsed_seconds >= animation.length - 0.0001:
+		_collapse_playing = false
+		# Clamp and evaluate the exact final key before stopping. `stop(true)` is
+		# essential here: the default stop() rewinds the character to frame zero.
+		_collapse_elapsed_seconds = animation.length
+		_animation_player.seek(animation.length, true)
+		_animation_player.advance(0.0)
+		_animation_player.stop(true)
 
 
 func _record_editor_camera_motion(options: Dictionary = {}) -> bool:

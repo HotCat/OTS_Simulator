@@ -576,11 +576,42 @@ frame."
         (message "Stopped collapse stream"))
     (message "No collapse stream is running")))
 
+;;;###autoload
+(cl-defun godot-character-play-collapse
+    (&key (animation "collapse_short/female_collapse_motion_0_3_68"))
+  "Play the native collapse ANIMATION from the character's current transform.
+
+The default is the clipped 3.68-second `female_collapse_motion' library
+entry. Godot duplicates and root-rebases the clip at playback time, so the
+current `IK_character' position and orientation are preserved; no
+`godot-character-set-initial-position' call is sent. Use `:animation` to play
+another AnimationPlayer library entry with the same current-transform policy."
+  (interactive)
+  ;; A native AnimationPlayer clip and the Python pose stream should never own
+  ;; the same skeleton simultaneously. Stop an Emacs-launched stream before
+  ;; handing control to the editor's baked animation.
+  (when (process-live-p godot-collapse--process)
+    (delete-process godot-collapse--process)
+    (setq godot-collapse--process nil))
+  (godot-walk--send "walk.collapse.play"
+                    `("animation" . ,animation))
+  (message "Playing native collapse from IK_character's current transform: %s"
+           animation))
+
+;;;###autoload
+(defun godot-character-stop-collapse-animation ()
+  "Stop native collapse playback while leaving its current pose visible."
+  (interactive)
+  (godot-walk--send "walk.collapse.stop")
+  (message "Stopped native collapse playback"))
+
 ;; Short names are convenient in shot files while the long names remain
 ;; discoverable through M-x and describe-function.
 (defalias 'godot-set-character-initial-position
   #'godot-character-set-initial-position)
 (defalias 'godot-start-collapse #'godot-character-start-collapse)
+(defalias 'godot-play-collapse #'godot-character-play-collapse)
+(defalias 'godot-stop-collapse-animation #'godot-character-stop-collapse-animation)
 (defalias 'godot-stop-collapse #'godot-character-stop-collapse)
 
 ;;;###autoload
@@ -634,10 +665,12 @@ frame."
 (cl-defun godot-female-walk-record-camera-motion
     (&key duration fps resolution start-delay (keep-frames :unspecified)
           viewport (auto-clip-to-camera-program :unspecified)
-          (program-end-padding 0.0) motion-source)
+          (program-end-padding 0.0) motion-source (auto-resolution t))
   "Start or stop OTS editor-camera recording with optional capture settings.
 
-DURATION is seconds, FPS is one of 12/24/30, RESOLUTION is `(WIDTH HEIGHT)',
+DURATION is seconds, FPS is one of 12/24/30, and RESOLUTION is `(WIDTH HEIGHT)'.
+When RESOLUTION is omitted and AUTO-RESOLUTION is non-nil, the recorder uses
+the actual pixel size of the selected Godot editor viewport.
 START-DELAY is seconds, KEEP-FRAMES retains source JPEGs, and VIEWPORT is the
 human-facing 1-based editor viewport number.  AUTO-CLIP-TO-CAMERA-PROGRAM uses
 the loaded camera program's duration.  PROGRAM-END-PADDING adds a final hold;
@@ -667,6 +700,8 @@ recording still stops the active take."
     (when fps (push `("fps" . ,fps) options))
     (when resolution
       (push `("resolution" . ,(godot-camera--vector2 resolution "resolution")) options))
+    (when (and auto-resolution (not resolution))
+      (push '("auto_resolution" . t) options))
     (when start-delay (push `("start_delay" . ,start-delay) options))
     (unless (eq keep-frames :unspecified)
       (push `("keep_frames" . ,(if keep-frames t :json-false)) options))

@@ -13,6 +13,11 @@ The actor documents are:
 Each `.gdpose` owns one character path, rig, active pose, and named pose
 library. The `.gdshot` stores references only, keeping character poses reusable.
 
+Older quaternion FK captures may omit `rotation_space`. The PoseStream bridge
+recognizes those quaternion profiles as Godot absolute local bone poses, while
+Euler profiles retain the legacy rest-relative interpretation. New streams
+should continue to write `rotation_space` explicitly.
+
 ## Load the Emacs mode
 
 Add this to your Emacs configuration:
@@ -127,6 +132,26 @@ position:
 `:quaternion` keywords. A quaternion takes precedence over
 `:rotation-degrees`, so the transform can be copied from the dragged
 `IK_character` gizmo without converting angles manually.
+
+For the baked native clip, use `godot-character-play-collapse` instead. It
+plays the clipped 3.68-second `female_collapse_motion` from the character's
+current position and orientation; it does not send an initial-transform reset:
+
+```elisp
+(godot-character-play-collapse)
+```
+
+The Godot editor duplicates the clip and rebases its root-position track and
+the animated `Skeleton3D:Root` rotation to the current `IK_character` pose
+before playback. Because an editor-only `AnimationPlayer` does not always
+receive normal scene ticks, `FemaleWalkController` explicitly advances the
+native clip clock and samples the animation every editor frame. The node
+position and orientation are explicitly restored at the first frame, so the
+collapse does not jump back to the source clip's authored setup. Use
+`M-x godot-character-stop-collapse-animation` to stop the native clip while
+leaving the current pose visible. The original Python-stream command remains
+available when you need a JSON pose cache instead of the baked AnimationPlayer
+clip.
 
 Use `M-x godot-character-stop-collapse` to stop the Emacs-launched stream.
 The initial transform is applied only once; the cache's `root_motion.positions`

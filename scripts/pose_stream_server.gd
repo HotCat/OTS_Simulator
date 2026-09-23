@@ -34,6 +34,8 @@ const WALK_TRANSPORT_CAPABILITIES: Array[String] = [
 	"walk.play",
 	"walk.pause",
 	"walk.restart",
+	"walk.collapse.play",
+	"walk.collapse.stop",
 	"walk.refresh_trajectory",
 	"walk.record_camera_motion",
 	"walk.motion_source.set",
@@ -216,6 +218,8 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 		"walk.play": method_name = "editor_transport_play"
 		"walk.pause": method_name = "editor_transport_pause"
 		"walk.restart": method_name = "editor_transport_restart"
+		"walk.collapse.play": method_name = "editor_transport_play_collapse"
+		"walk.collapse.stop": method_name = "editor_transport_stop_collapse"
 		"walk.refresh_trajectory": method_name = "editor_transport_refresh_trajectory"
 		"walk.record_camera_motion": method_name = "editor_transport_record_camera_motion"
 		"walk.motion_source.set": method_name = "editor_transport_set_motion_source"
@@ -238,6 +242,11 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 	elif message_type == "walk.motion_source.set":
 		var source_value := str(message.get("source", ""))
 		result = controller.call(method_name, source_value) as Dictionary
+	elif message_type == "walk.collapse.play":
+		result = controller.call(
+			method_name,
+			str(message.get("animation", "collapse_short/female_collapse_motion_0_3_68")),
+		) as Dictionary
 	else:
 		result = controller.call(method_name) as Dictionary
 	if not bool(result.get("ok", false)):
@@ -252,6 +261,8 @@ func _walk_response_type(message_type: String) -> String:
 		"walk.play": return "walk.playing"
 		"walk.pause": return "walk.paused"
 		"walk.restart": return "walk.restarted"
+		"walk.collapse.play": return "walk.collapse.playing"
+		"walk.collapse.stop": return "walk.collapse.stopped"
 		"walk.refresh_trajectory": return "walk.trajectory_refreshed"
 		"walk.record_camera_motion": return "walk.camera_recording_toggled"
 		"walk.motion_source.set": return "walk.motion_source_set"
@@ -399,6 +410,7 @@ func _apply_message(message: Dictionary) -> Dictionary:
 		"control_names_missing": control_result.missing,
 		"modifiers_applied": modifier_result.applied,
 		"modifier_names_missing": modifier_result.missing,
+		"bone_rotation_space": bone_result.get("rotation_space", ""),
 		"root_motion_applied": root_motion_result.applied,
 		"root_motion_space": root_motion_result.space,
 		"root_motion_origin": root_motion_result.get("origin", ""),
@@ -569,8 +581,9 @@ func _apply_bones(skeleton: Skeleton3D, pose: Dictionary) -> Dictionary:
 	var missing: Array[String] = []
 	var bones_value = pose.get("bones", {})
 	if not bones_value is Dictionary:
-		return {"applied": applied, "missing": missing}
+		return {"applied": applied, "missing": missing, "rotation_space": ""}
 	var bones := bones_value as Dictionary
+	var rotation_space := _pose_rotation_space(pose)
 	var euler_order := _euler_order_from_name(str(pose.get("euler_order", "YXZ")))
 	for bone_name_value in bones:
 		var bone_name := str(bone_name_value)
@@ -588,13 +601,36 @@ func _apply_bones(skeleton: Skeleton3D, pose: Dictionary) -> Dictionary:
 			skeleton.set_bone_pose_position(bone_idx, skeleton.get_bone_pose_position(bone_idx).lerp(position, weight))
 		var target_rotation: Variant = _rotation_from_data(bone_data, euler_order)
 		if target_rotation != null:
+			if rotation_space == "godot4_rest_relative_local_pose":
+				# Legacy streams may contain a rest-relative delta. The Godot pose
+				# API replaces the local rotation with the final absolute parent-space
+				# value, so restore the imported GLB rest basis before applying it.
+				target_rotation = (skeleton.get_bone_rest(bone_idx).basis.get_rotation_quaternion() *
+					target_rotation).normalized()
 			var current_rotation := skeleton.get_bone_pose_rotation(bone_idx)
 			skeleton.set_bone_pose_rotation(bone_idx, current_rotation.slerp(target_rotation as Quaternion, weight).normalized())
 		if bone_data.has("scale"):
 			var scale := _vec3(bone_data.get("scale"), skeleton.get_bone_pose_scale(bone_idx))
 			skeleton.set_bone_pose_scale(bone_idx, skeleton.get_bone_pose_scale(bone_idx).lerp(scale, weight))
 		applied += 1
-	return {"applied": applied, "missing": missing}
+	return {"applied": applied, "missing": missing, "rotation_space": rotation_space}
+
+
+func _pose_rotation_space(pose: Dictionary) -> String:
+	# Older .gdpose profiles omitted rotation_space. Their Euler profiles are
+	# authored as rest-relative deltas, while quaternion captures from the
+	# editor are serialized as Godot's absolute local bone poses. Infer the
+	# latter only when the document has no explicit declaration; live mocap
+	# streams and newer profiles remain authoritative through their field.
+	var declared := str(pose.get("rotation_space", "")).strip_edges()
+	if not declared.is_empty():
+		return declared
+	var bones_value = pose.get("bones", {})
+	if bones_value is Dictionary:
+		for bone_data_value in (bones_value as Dictionary).values():
+			if bone_data_value is Dictionary and (bone_data_value as Dictionary).has("rotation_quaternion"):
+				return "godot4_absolute_local_bone_pose"
+	return "godot4_rest_relative_local_pose"
 
 func _apply_ik_controls(character: Node3D, character_spec: Dictionary, pose: Dictionary) -> Dictionary:
 	var applied := 0

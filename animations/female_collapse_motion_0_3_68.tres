@@ -1,4 +1,4 @@
-[gd_resource type="AnimationLibrary" format=3]
+[gd_resource type="AnimationLibrary" format=3 uid="uid://brd5xq361sapo"]
 
 [sub_resource type="Animation" id="Animation_fihq5"]
 resource_name = "female_collapse_motion_0_3_68"
