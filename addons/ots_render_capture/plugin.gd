@@ -1258,17 +1258,28 @@ func _record_editor_camera_video() -> void:
 	var camera_program_duration := 0.0
 	var program_end_padding := float(_video_program_end_padding.value)
 	if _use_camera_program_duration.button_pressed:
-		if not _camera_program_loaded or _camera_motion_program.duration_seconds <= 0.0:
+		# Emacs can send the program and the record request back-to-back. Give the
+		# pose-stream transport a short grace period to deliver/load the program
+		# before deciding whether auto-clip is available. If no program arrives,
+		# continue with the manual duration instead of throwing away the capture.
+		var program_wait_deadline_usec := Time.get_ticks_usec() + 750000
+		while (not _camera_program_loaded or _camera_motion_program.duration_seconds <= 0.0) and \
+				Time.get_ticks_usec() < program_wait_deadline_usec and not _video_cancel_requested:
+			await get_tree().process_frame
+		if _video_cancel_requested:
 			capture_viewport.queue_free()
 			_remove_frame_directory(frames_directory)
 			DirAccess.remove_absolute(output_directory)
-			_finish_video_with_error(
-				"Auto-clip requires a loaded camera program. Send the program before starting the recording."
-			)
+			_end_fixed_step_capture()
+			_finish_video_cancelled("Camera-motion recording cancelled while waiting for the camera program.")
 			return
-		camera_program_duration = _camera_motion_program.duration_seconds
-		requested_duration = maxf(1.0 / float(fps), camera_program_duration + program_end_padding)
-		duration_source = "camera_program"
+		if _camera_program_loaded and _camera_motion_program.duration_seconds > 0.0:
+			camera_program_duration = _camera_motion_program.duration_seconds
+			requested_duration = maxf(1.0 / float(fps), camera_program_duration + program_end_padding)
+			duration_source = "camera_program"
+		else:
+			push_warning("OTS Video: camera program was not loaded; using the manual duration.")
+			print("OTS_VIDEO camera program unavailable; using manual duration %.3f s" % requested_duration)
 	var requested_frames := maxi(1, ceili(requested_duration * float(fps)))
 
 	var camera_samples: Array[Dictionary] = []
@@ -1594,9 +1605,12 @@ func _collect_live_capture_bindings(
 			var source_mesh_instance := source_node as MeshInstance3D
 			var capture_mesh_instance := capture_node as MeshInstance3D
 			if source_mesh_instance.mesh != null and capture_mesh_instance.mesh != null:
+				# ImmediateMesh and several procedural Mesh implementations do not
+				# expose ArrayMesh's blend-shape API. They still render correctly;
+				# simply omit them from the optional blend-shape synchronization.
 				var blend_shape_count := mini(
-					source_mesh_instance.mesh.get_blend_shape_count(),
-					capture_mesh_instance.mesh.get_blend_shape_count()
+					_mesh_blend_shape_count(source_mesh_instance.mesh),
+					_mesh_blend_shape_count(capture_mesh_instance.mesh)
 				)
 				if blend_shape_count > 0:
 					mesh_pairs.append({
@@ -1656,6 +1670,12 @@ func _sync_live_capture_state(bindings: Dictionary) -> void:
 				blend_shape_index,
 				source.get_blend_shape_value(blend_shape_index)
 			)
+
+
+func _mesh_blend_shape_count(mesh: Mesh) -> int:
+	if mesh == null or not mesh.has_method("get_blend_shape_count"):
+		return 0
+	return maxi(0, int(mesh.call("get_blend_shape_count")))
 
 
 func _serialize_camera_sample(camera: Camera3D, frame_index: int, fps: int) -> Dictionary:
