@@ -655,6 +655,14 @@ func _build_camera_calibration_panel() -> void:
 	restore_initial_view.button_down.connect(_restore_initial_view_from_panel)
 	initial_view_actions.add_child(restore_initial_view)
 	_dock_content.add_child(initial_view_actions)
+	var character_transform_actions := HBoxContainer.new()
+	var copy_character_transform := Button.new()
+	copy_character_transform.text = "Copy character placement API"
+	copy_character_transform.tooltip_text = "Copy IK_character's current local position and quaternion as a godot-character-set-initial-position form."
+	copy_character_transform.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	copy_character_transform.button_down.connect(_copy_current_character_transform)
+	character_transform_actions.add_child(copy_character_transform)
+	_dock_content.add_child(character_transform_actions)
 
 	var orbit_separator := HSeparator.new()
 	_dock_content.add_child(orbit_separator)
@@ -830,6 +838,26 @@ func _copy_current_initial_view() -> void:
 	_camera_follow_base_relative_transform = relative
 	_camera_work_zero_valid = true
 	_status_label.text = "Copied quaternion initial-view API to the system clipboard."
+
+
+func _copy_current_character_transform() -> void:
+	## Copy the transform consumed by `godot-character-set-initial-position`.
+	##
+	## `position` and `quaternion` are intentionally read from the character's
+	## local transform, rather than its global transform. The Emacs API places
+	## IK_character relative to its scene parent, and the quaternion is emitted
+	## in the same XYZW order accepted by the pose-stream receiver.
+	var character := _camera_measurement_character()
+	if character == null:
+		_camera_coordinate_status.text = "Open a scene containing IK_character first."
+		return
+	var p := character.position
+	var q := character.quaternion.normalized()
+	var command := "(godot-character-set-initial-position\n :position '(%.6f %.6f %.6f)\n :quaternion '(%.9f %.9f %.9f %.9f))" % [
+		p.x, p.y, p.z, q.x, q.y, q.z, q.w,
+	]
+	DisplayServer.clipboard_set(command)
+	_status_label.text = "Copied IK_character position/quaternion API to the system clipboard."
 
 
 func _restore_initial_view_from_panel() -> void:

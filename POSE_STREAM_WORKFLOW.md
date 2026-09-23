@@ -93,6 +93,22 @@ remain available for hand-authored Euler shots:
  :rotation-degrees '(0.0 180.0 0.0))
 ```
 
+For a posed character, use the **Copy character placement API** button in the
+OTS Render dock's **Camera Work Coordinates** panel. It reads the current
+`IK_character` local transform and places this exact multiline form on the
+system clipboard, ready to paste into Emacs:
+
+```elisp
+(godot-character-set-initial-position
+ :position '(-0.60 0.055 3.25)
+ :quaternion '(qx qy qz qw))
+```
+
+The copied position is relative to `IK_character`'s scene parent, and the
+quaternion is emitted in Godot's XYZW order. This means the button captures
+the transform after dragging the character gizmo or after applying a posed
+animation/root-motion state, without requiring manual coordinate conversion.
+
 `M-x godot-character-start-collapse` first selects `external_pose`, resets the
 character to the requested initial transform, and launches the configured
 `video_to_pose_stream.py` process with the collapse cache. With a prefix
