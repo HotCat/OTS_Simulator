@@ -454,7 +454,12 @@ relative handle deltas."
   (godot-camera--send "camera.follow.stop"))
 
 (defun godot-walk--send (type &rest properties)
-  "Send walk transport message TYPE to `godot-camera-walk-controller'."
+  "Send walk transport message TYPE to the configured walk controller.
+
+The recording transport has an editor-service fallback: when the configured
+legacy controller is absent (as in `ots_carry_clay_proxy.tscn'), Godot sends
+`walk.record_camera_motion' directly to OTS Render Capture.  Other walk
+commands still require the configured controller."
   (apply #'godot-camera--send
          type
          (cons `("controller_node" . ,godot-camera-walk-controller)
@@ -719,7 +724,10 @@ pose.frame retargeting.  The source is sent with the recording request so a
 shot function does not depend on stale editor state.
 The symbol `camera-program' is also accepted as DURATION shorthand.  Omitting
 all options preserves the dock's current values.  Calling the function while
-recording still stops the active take."
+recording still stops the active take.  In an OTS carry scene this command is
+safe to reuse even when `godot-camera-walk-controller' (normally
+`FemaleWalkController') is not present; the Godot editor bridge routes the
+request to OTS Render Capture directly."
   (interactive)
   (let* ((program-duration-p (eq duration 'camera-program))
          (auto-option-specified (not (eq auto-clip-to-camera-program :unspecified)))

@@ -217,6 +217,13 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 		"controller_node", str(DEFAULT_WALK_CONTROLLER_PATH)
 	)))
 	var controller := scene.get_node_or_null(controller_path)
+	# Camera recording is an editor service, not a responsibility of the
+	# legacy FemaleWalkController.  OTS carry scenes intentionally omit that
+	# controller, so dispatch this command directly to OTS Render Capture when
+	# the requested walk controller is absent.  Keeping the legacy path below
+	# preserves existing scenes and their status callbacks.
+	if message_type == "walk.record_camera_motion" and controller == null:
+		return _handle_editor_camera_record_request(message, controller_path)
 	if controller == null:
 		return {
 			"type": "error",
@@ -265,6 +272,36 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 	result["controller_node"] = str(controller_path)
 	result["type"] = _walk_response_type(message_type)
 	return result
+
+
+func _handle_editor_camera_record_request(message: Dictionary, controller_path: NodePath) -> Dictionary:
+	var options_value = message.get("options", {})
+	if not options_value is Dictionary:
+		return {"type": "error", "error": "walk_record_options_must_be_object"}
+	var capture_service := get_tree().get_first_node_in_group(CAMERA_SERVICE_GROUP)
+	if capture_service == null:
+		return {
+			"type": "error",
+			"error": "camera_recording_service_unavailable",
+			"controller_node": str(controller_path),
+		}
+	if not capture_service.has_method("request_editor_camera_video"):
+		return {
+			"type": "error",
+			"error": "camera_recording_service_method_unavailable",
+			"controller_node": str(controller_path),
+		}
+	# The plugin owns all duration, FPS, viewport, auto-resolution, and
+	# auto-clip interpretation.  Forward the dictionary unchanged so this
+	# transport has exactly the same behavior as the dock and legacy controller.
+	capture_service.call("request_editor_camera_video", options_value)
+	return {
+		"ok": true,
+		"type": "walk.camera_recording_toggled",
+		"recording_requested": true,
+		"controller_node": str(controller_path),
+		"service": "ots_render_capture",
+	}
 
 func _handle_trajectory_restart(scene: Node, message: Dictionary) -> Dictionary:
 	# Accept a root name, a scene-relative path, or a unique nested node name.
