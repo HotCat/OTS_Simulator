@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit a short video to the female humanoid and stream ``pose.frame`` FK.
+"""Fit a short video to a target humanoid and stream ``pose.frame`` FK.
 
 This tool deliberately keeps motion capture outside Godot.  NLF supplies dense
 3D joint observations, SAM 3D Body supplies sparse orientation/twist anchors,
@@ -1704,6 +1704,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sam3d-device", default="cpu")
     parser.add_argument("--target-glb", type=Path,
                         default=project / "assets/models/actor_1787313553107_v2_realtime_proxy.glb")
+    parser.add_argument("--expected-bones", type=int, default=0,
+                        help="optional target-rig bone count; 0 accepts any compatible humanoid rig")
     parser.add_argument("--output-dir", type=Path,
                         default=project / "renders/mocap/girl_dance_003_first4s")
     parser.add_argument("--reuse-observations", action="store_true")
@@ -1801,8 +1803,16 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
 
     target = load_gltf_rig(args.target_glb)
     source = load_mhr_rig(args.mhr_model)
-    if len(target.names) != 56:
-        raise RuntimeError(f"expected the female target to contain 56 bones, found {len(target.names)}")
+    if args.expected_bones > 0 and len(target.names) != args.expected_bones:
+        raise RuntimeError(
+            f"expected target to contain {args.expected_bones} bones, found {len(target.names)}"
+        )
+    required_bones = {"Hips", "Spine", "Chest", "UpperChest", "Neck", "Head"}
+    missing_bones = sorted(required_bones.difference(target.index))
+    if missing_bones:
+        raise RuntimeError(
+            "target GLB is missing required humanoid bones: " + ", ".join(missing_bones)
+        )
     frame_data, diagnostics, root_motion = solve_motion(
         target, source, observations["nlf"], observations["sam3d"], frame_count,
         args.fps, args.nlf_weight, args.root_motion, args.foot_lock_strength,
@@ -1837,7 +1847,7 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
     }
     output_path = args.output_dir / "motion_pose_frames.json"
     write_json(output_path, motion)
-    print(f"Wrote {frame_count} fitted 56-bone quaternion frames to {output_path}")
+    print(f"Wrote {frame_count} fitted {len(target.names)}-bone quaternion frames to {output_path}")
     return motion
 
 

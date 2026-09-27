@@ -8,19 +8,20 @@ extends SceneTree
 ## samples, but those are intentionally ignored here; root motion is
 ## represented by the character node track.
 
-# The base scene is only used for absolute root-position keys. Bone tracks are
-# local to IK_character/Skeleton3D and therefore remain reusable on another
-# instance of the same rig. Keep the historical manual-rig default for walk
-# clips, and pass the active scene explicitly when baking a scene-bound clip.
+# The base scene is used for absolute root-position keys and rest rotations.
+# Character and skeleton paths are configurable so one cache can be baked for
+# either character in an OTS scene without targeting the other rig.
 const DEFAULT_BASE_SCENE := "res://demos/my_manual_rig_pose.tscn"
 var _base_scene_path := DEFAULT_BASE_SCENE
+var _character_path := "IK_character"
+var _skeleton_path := "IK_character/Skeleton3D"
 var _rotation_space := ""
 var _rest_rotations: Dictionary = {}
 
 func _initialize() -> void:
 	var arguments := OS.get_cmdline_user_args()
 	if arguments.size() < 2:
-		_fail("Usage: Godot --headless --path . --script res://tools/bake_motion_cache.gd -- <cache.json> <library.tres> [base-scene.tscn]")
+		_fail("Usage: Godot --headless --path . --script res://tools/bake_motion_cache.gd -- <cache.json> <library.tres> [base-scene.tscn] [character-path] [skeleton-path]")
 		return
 	var cache_path := _globalize(arguments[0])
 	var output_path := arguments[1]
@@ -28,6 +29,12 @@ func _initialize() -> void:
 		_base_scene_path = arguments[2]
 		if not _base_scene_path.begins_with("res://"):
 			_base_scene_path = _globalize(_base_scene_path)
+	if arguments.size() >= 4:
+		_character_path = arguments[3]
+	if arguments.size() >= 5:
+		_skeleton_path = arguments[4]
+	else:
+		_skeleton_path = "%s/Skeleton3D" % _character_path
 	var file := FileAccess.open(cache_path, FileAccess.READ)
 	if file == null:
 		_fail("Cannot open motion cache: %s" % cache_path)
@@ -69,7 +76,7 @@ func _initialize() -> void:
 	for bone_name_value in (first_frame as Dictionary):
 		var bone_name := str(bone_name_value)
 		var track := animation.add_track(Animation.TYPE_ROTATION_3D)
-		animation.track_set_path(track, NodePath("IK_character/Skeleton3D:%s" % bone_name))
+		animation.track_set_path(track, NodePath("%s:%s" % [_skeleton_path, bone_name]))
 		animation.track_set_interpolation_type(track, Animation.INTERPOLATION_LINEAR)
 		for frame_index in frames.size():
 			var frame = frames[frame_index]
@@ -116,9 +123,9 @@ func _bake_cycle_vertical_track(animation: Animation, root: Dictionary,
 	var positions = root.get("positions", [])
 	if not positions is Array or positions.size() != frame_count:
 		return
-	var base := _scene_node_position("IK_character/Skeleton3D")
+	var base := _scene_node_position(_skeleton_path)
 	var track := animation.add_track(Animation.TYPE_POSITION_3D)
-	animation.track_set_path(track, NodePath("IK_character/Skeleton3D"))
+	animation.track_set_path(track, NodePath(_skeleton_path))
 	animation.track_set_interpolation_type(track, Animation.INTERPOLATION_LINEAR)
 	for frame_index in frame_count:
 		var vertical := float(positions[frame_index][1])
@@ -141,7 +148,7 @@ func _bake_root_tracks(animation: Animation, root: Dictionary,
 	if local_forward.is_zero_approx():
 		local_forward = Vector3.FORWARD
 	local_forward = local_forward.normalized()
-	var origin := _scene_node_position("IK_character")
+	var origin := _scene_node_position(_character_path)
 	if not str(root.get("scene_origin_node", "")).is_empty():
 		origin = _trajectory_origin(str(root.get("scene_origin_node", "")))
 	# JSON stores an absent optional ground override as null. Godot 4.7 no
@@ -151,7 +158,7 @@ func _bake_root_tracks(animation: Animation, root: Dictionary,
 		origin.y = float(ground_y)
 	if positions is Array and positions.size() == frame_count:
 		var position_track := animation.add_track(Animation.TYPE_POSITION_3D)
-		animation.track_set_path(position_track, NodePath("IK_character"))
+		animation.track_set_path(position_track, NodePath(_character_path))
 		animation.track_set_interpolation_type(position_track, Animation.INTERPOLATION_LINEAR)
 		for frame_index in frame_count:
 			animation.position_track_insert_key(
@@ -168,7 +175,7 @@ func _bake_root_tracks(animation: Animation, root: Dictionary,
 				break
 	if should_bake_rotation:
 		var rotation_track := animation.add_track(Animation.TYPE_ROTATION_3D)
-		animation.track_set_path(rotation_track, NodePath("IK_character"))
+		animation.track_set_path(rotation_track, NodePath(_character_path))
 		animation.track_set_interpolation_type(rotation_track, Animation.INTERPOLATION_LINEAR)
 		for frame_index in frame_count:
 			var rotation := Quaternion.IDENTITY
@@ -200,7 +207,7 @@ func _load_rest_rotations() -> void:
 	if scene == null:
 		return
 	var root := scene.instantiate()
-	var skeleton := root.get_node_or_null(NodePath("IK_character/Skeleton3D")) as Skeleton3D
+	var skeleton := root.get_node_or_null(NodePath(_skeleton_path)) as Skeleton3D
 	if skeleton != null:
 		for bone_index in skeleton.get_bone_count():
 			var bone_name := skeleton.get_bone_name(bone_index)

@@ -34,6 +34,8 @@ const WALK_TRANSPORT_CAPABILITIES: Array[String] = [
 	"walk.play",
 	"walk.pause",
 	"walk.restart",
+	"walk.trajectory.restart",
+	"walk.ots_carry.play",
 	"walk.collapse.play",
 	"walk.collapse.stop",
 	"walk.refresh_trajectory",
@@ -203,6 +205,14 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 	var scene := _pose_scene_root()
 	if scene == null:
 		return {"type": "error", "error": "edited_scene_missing"}
+	# These two commands belong to the OTSCarryClayProxy scene controller,
+	# rather than the legacy FemaleWalkController. Dispatch them before the
+	# controller lookup so nested carry scenes can own their own AnimationPlayer
+	# and trajectory without pretending to be a FemaleWalkController.
+	if message_type == "walk.trajectory.restart":
+		return _handle_trajectory_restart(scene, message)
+	if message_type == "walk.ots_carry.play":
+		return _handle_ots_carry_play(scene, message)
 	var controller_path := NodePath(str(message.get(
 		"controller_node", str(DEFAULT_WALK_CONTROLLER_PATH)
 	)))
@@ -256,11 +266,64 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 	result["type"] = _walk_response_type(message_type)
 	return result
 
+func _handle_trajectory_restart(scene: Node, message: Dictionary) -> Dictionary:
+	# Accept a root name, a scene-relative path, or a unique nested node name.
+	# This keeps the Emacs command stable when the carry block is wrapped in a
+	# different shot scene hierarchy.
+	var target_name := str(message.get("target_node", "OTSCarryClayProxy"))
+	var target := scene.get_node_or_null(NodePath(target_name)) as Node
+	if target == null and str(scene.name) == target_name:
+		target = scene
+	if target == null and not target_name.contains("/"):
+		var matches: Array[Node] = []
+		_find_nodes_by_name(scene, target_name, matches)
+		if matches.size() == 1:
+			target = matches[0]
+	if target == null:
+		return {"type": "error", "error": "trajectory_owner_not_found", "target_node": target_name}
+	if not target.has_method("restart_carrier_trajectory"):
+		return {"type": "error", "error": "trajectory_restart_unavailable", "target_node": target_name}
+	target.call("restart_carrier_trajectory")
+	return {
+		"type": "walk.trajectory.restarted",
+		"ok": true,
+		"target_node": str(target.get_path()),
+	}
+
+func _handle_ots_carry_play(scene: Node, message: Dictionary) -> Dictionary:
+	# Resolve the OTS owner independently from the legacy walk controller. The
+	# owner validates the AnimationPlayer/library entry and resets the trajectory
+	# atomically before starting the requested clip.
+	var target_name := str(message.get("target_node", "OTSCarryClayProxy"))
+	var target := scene.get_node_or_null(NodePath(target_name)) as Node
+	if target == null and str(scene.name) == target_name:
+		target = scene
+	if target == null and not target_name.contains("/"):
+		var matches: Array[Node] = []
+		_find_nodes_by_name(scene, target_name, matches)
+		if matches.size() == 1:
+			target = matches[0]
+	if target == null:
+		return {"type": "error", "error": "ots_carry_owner_not_found", "target_node": target_name}
+	if not target.has_method("editor_transport_play_ots_carry"):
+		return {"type": "error", "error": "ots_carry_transport_unavailable", "target_node": target_name}
+	var animation_name := str(message.get("animation", ""))
+	var restart := bool(message.get("restart", true))
+	var result := target.call("editor_transport_play_ots_carry", animation_name, restart) as Dictionary
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = "walk.ots_carry.playing"
+	result["target_node"] = str(target.get_path())
+	return result
+
 func _walk_response_type(message_type: String) -> String:
 	match message_type:
 		"walk.play": return "walk.playing"
 		"walk.pause": return "walk.paused"
 		"walk.restart": return "walk.restarted"
+		"walk.trajectory.restart": return "walk.trajectory.restarted"
+		"walk.ots_carry.play": return "walk.ots_carry.playing"
 		"walk.collapse.play": return "walk.collapse.playing"
 		"walk.collapse.stop": return "walk.collapse.stopped"
 		"walk.refresh_trajectory": return "walk.trajectory_refreshed"
@@ -554,7 +617,23 @@ func _find_character(character_spec: Dictionary) -> Node3D:
 	var character := scene.get_node_or_null(NodePath(path_string)) as Node3D
 	if character == null and str(scene.name) == path_string:
 		character = scene as Node3D
+	# Pose documents are intentionally portable between the original manual
+	# scene and wrapper scenes such as OTSCarryClayProxy/ManualCarryBlock. If a
+	# document names the authored character as `IK_character`, resolve that
+	# basename through nested scene instances instead of requiring every pose
+	# file to be rewritten when the scene is wrapped.
+	if character == null and not path_string.contains("/"):
+		var matches: Array[Node] = []
+		_find_nodes_by_name(scene, path_string, matches)
+		if matches.size() == 1:
+			character = matches[0] as Node3D
 	return character
+
+func _find_nodes_by_name(node: Node, wanted_name: String, matches: Array[Node]) -> void:
+	for child in node.get_children():
+		if child.name == wanted_name:
+			matches.append(child)
+		_find_nodes_by_name(child, wanted_name, matches)
 
 func _pose_scene_root() -> Node:
 	var scene: Node = null

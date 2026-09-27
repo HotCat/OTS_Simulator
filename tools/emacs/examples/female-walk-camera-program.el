@@ -222,20 +222,23 @@ I also notice that the character rotate to the collapse initial position, that i
   ;; Auto-duration needs the program loaded before recording starts.
   (godot-camera-send-program :play nil)
 
-  (godot-character-play-collapse)
+
 
 
   ;; Record the complete camera program.  The native collapse clock is
   ;; advanced by the same fixed-step capture path, while `stationary' keeps
   ;; the legacy walk evaluator from taking ownership of IK_character.
-  (godot-walk-record-camera-motion
-   :motion-source 'stationary
-   :auto-clip-to-camera-program t
-   :program-end-padding 0.0
-   :fps 24
-   :start-delay 0.1
-   :viewport 1)
 
+(godot-camera-send-program :play nil)
+
+(godot-character-play-collapse)
+(godot-walk-record-camera-motion
+ :motion-source 'stationary
+ :auto-clip-to-camera-program t
+ :program-end-padding 0.0
+ :fps 24
+ :start-delay 0.1
+ :viewport 1)
 
 
   (godot-camera-play t))
@@ -244,3 +247,11 @@ I also notice that the character rotate to the collapse initial position, that i
 (godot-camera-release-follow)
 
 (godot-character-play-collapse)
+
+
+(godot-walk-restart-carrier-trajectory)
+
+
+(godot-camera-confirm-follow
+   :target-node "MaleCarrier"
+   :viewport 1)

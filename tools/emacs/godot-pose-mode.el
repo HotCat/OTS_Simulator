@@ -564,6 +564,7 @@ When CHOOSE-POSE is non-nil, choose the active pose first."
                          ("buffer" . ,(buffer-name))))
             ("character" . ,character)
             ("pose_name" . ,pose-name)
+            ("ack" . t)
             ("pose" . ,pose)))
          (process (godot-pose--ensure-stream document endpoint-key)))
     (process-send-string process (concat (json-encode message-object) "\n"))

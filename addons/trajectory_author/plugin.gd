@@ -5,7 +5,8 @@ extends EditorPlugin
 ## Waypoint positions are relative to the trajectory root. Consecutive points
 ## are connected by straight segments; legacy handle children are ignored.
 
-const ROOT_NAME := "FemaleWalkTrajectory"
+const FEMALE_ROOT_NAME := "FemaleWalkTrajectory"
+const CARRIER_ROOT_NAME := "CarrierTrajectory"
 const PREVIEW_NAME := "CurvePreview"
 const DEFAULT_JSON_PATH := "res://trajectories/female_walk_bezier.json"
 const CHARACTER_PATH := NodePath("IK_character")
@@ -137,12 +138,6 @@ func _load_or_select_markers() -> void:
 	if scene_root == null:
 		_status.text = "Open an editable 3D scene first."
 		return
-	var existing := _trajectory_root()
-	if existing != null:
-		_select_node(existing)
-		_status.text = "Existing trajectory selected. Choose W, IN, or OUT below."
-		_refresh_ui()
-		return
 	var path := _path_field.text.strip_edges()
 	if not FileAccess.file_exists(path):
 		_status.text = "Trajectory JSON does not exist: %s" % path
@@ -151,20 +146,33 @@ func _load_or_select_markers() -> void:
 	if file == null:
 		_status.text = "Could not read trajectory JSON: %s" % path
 		return
-	var parsed = JSON.parse_string(file.get_as_text())
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	if not parsed is Dictionary:
 		_status.text = "Trajectory JSON must contain an object."
 		return
 	var data := parsed as Dictionary
-	var values = data.get("waypoints", [])
+	var values: Variant = data.get("waypoints", [])
 	if not values is Array or values.size() < 2:
 		_status.text = "Trajectory JSON needs at least two waypoints."
 		return
+	var existing := _trajectory_root()
+	if existing != null:
+		_sync_waypoints_from_values(existing, values as Array, scene_root)
+		_ensure_preview(existing)
+		EditorInterface.mark_scene_as_unsaved()
+		_last_marker_state = ""
+		_refresh_ui()
+		var synced := _waypoints(existing)
+		if not synced.is_empty():
+			_select_node(synced[0])
+		_status.text = "Reloaded %d waypoints from %s" % [synced.size(), path]
+		print("TRAJECTORY reloaded %d waypoints from %s into %s" % [synced.size(), path, existing.name])
+		return
 
 	var root := Node3D.new()
-	root.name = ROOT_NAME
+	root.name = _default_root_name(scene_root)
 	root.editor_description = "DRAGGABLE LINEAR WALK PATH: waypoint positions are relative to this origin and connected by straight segments."
-	var character := scene_root.get_node_or_null(CHARACTER_PATH) as Node3D
+	var character := _trajectory_character(scene_root)
 	if character != null:
 		root.position = character.position
 	for index in values.size():
@@ -182,6 +190,37 @@ func _load_or_select_markers() -> void:
 	_last_marker_state = ""
 	_refresh_ui()
 	_status.text = "Linear markers loaded. Drag W to position each straight segment."
+
+
+func _sync_waypoints_from_values(root: Node3D, values: Array, scene_root: Node) -> void:
+	var points := _waypoints(root)
+	# Remove scene markers that are no longer present in the JSON. Detach them
+	# immediately so the refreshed dock cannot count nodes queued for deletion.
+	while points.size() > values.size():
+		var surplus := points.pop_back() as Marker3D
+		root.remove_child(surplus)
+		surplus.queue_free()
+	for index in values.size():
+		var item: Variant = values[index]
+		if not item is Dictionary:
+			continue
+		var waypoint: Marker3D
+		if index < points.size():
+			waypoint = points[index]
+		else:
+			waypoint = _make_waypoint(index, Vector3.ZERO)
+			root.add_child(waypoint)
+			waypoint.owner = scene_root
+			_set_marker_owners(waypoint, scene_root)
+			points.append(waypoint)
+		waypoint.name = "Waypoint_%02d" % index
+		waypoint.position = _array_to_vector((item as Dictionary).get("position", [0.0, 0.0, 0.0]))
+		var incoming := waypoint.get_node_or_null("InHandle") as Marker3D
+		var outgoing := waypoint.get_node_or_null("OutHandle") as Marker3D
+		if incoming != null:
+			incoming.position = _array_to_vector((item as Dictionary).get("in_handle", [0.0, 0.0, 0.0]))
+		if outgoing != null:
+			outgoing.position = _array_to_vector((item as Dictionary).get("out_handle", [0.0, 0.0, 0.0]))
 
 
 func _attach_root(scene_root: Node, root: Node3D) -> void:
@@ -290,7 +329,7 @@ func _export_json() -> void:
 		"contact_correction": 0.0,
 		"foot_ik": true,
 		"foot_ik_strength": 1.0,
-		"local_forward": [0.0, 0.0, -1.0],
+		"local_forward": [0.0, 0.0, 1.0] if root.name == CARRIER_ROOT_NAME else [0.0, 0.0, -1.0],
 		"upright_root": true,
 		"ground_lock": true,
 		"ground_y": 0.0,
@@ -300,7 +339,7 @@ func _export_json() -> void:
 		"torso_upright_strength": 1.0,
 		"max_head_up_degrees": 4.0,
 		"head_forward_axis": [0.0, 0.0, 1.0],
-		"scene_origin_node": "%s/Waypoint_00" % ROOT_NAME,
+		"scene_origin_node": "%s/Waypoint_00" % root.name,
 		"waypoints": items,
 	}
 	var path := _path_field.text.strip_edges()
@@ -390,7 +429,26 @@ func _trajectory_root() -> Node3D:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return null
-	return scene_root.get_node_or_null(NodePath(ROOT_NAME)) as Node3D
+	var carrier := scene_root.get_node_or_null(NodePath(CARRIER_ROOT_NAME)) as Node3D
+	if carrier != null:
+		return carrier
+	var female := scene_root.get_node_or_null(NodePath(FEMALE_ROOT_NAME)) as Node3D
+	if female != null:
+		return female
+	for child in scene_root.get_children():
+		if child is Node3D and child.has_meta("walk_trajectory"):
+			return child as Node3D
+	return null
+
+
+func _default_root_name(scene_root: Node) -> String:
+	return CARRIER_ROOT_NAME if scene_root.has_node("ManualCarryBlock/MaleCarrier") else FEMALE_ROOT_NAME
+
+
+func _trajectory_character(scene_root: Node) -> Node3D:
+	if scene_root.has_node("ManualCarryBlock/MaleCarrier"):
+		return scene_root.get_node_or_null("ManualCarryBlock/MaleCarrier") as Node3D
+	return scene_root.get_node_or_null(CHARACTER_PATH) as Node3D
 
 
 func _waypoints(root: Node3D) -> Array[Marker3D]:

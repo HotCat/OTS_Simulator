@@ -130,7 +130,9 @@ func set_editor_camera_initial_view(view: Dictionary) -> Dictionary:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return {"ok": false, "error": "edited_scene_missing"}
-	var target_path := NodePath(str(view.get("target_node", str(FEMALE_PATH))))
+	var target_path := _resolve_requested_character_path(
+		scene_root, NodePath(str(view.get("target_node", _default_female_path_string())))
+	)
 	var character := scene_root.get_node_or_null(target_path) as Node3D
 	if character == null:
 		return {"ok": false, "error": "camera_follow_target_missing", "target_node": str(target_path)}
@@ -215,7 +217,9 @@ func confirm_editor_camera_follow(options: Dictionary = {}) -> Dictionary:
 	if scene_root == null:
 		_set_camera_follow_error("Open an editable scene before confirming camera follow.")
 		return {"ok": false, "error": "edited_scene_missing"}
-	var target_path := NodePath(str(options.get("target_node", str(FEMALE_PATH))))
+	var target_path := _resolve_requested_character_path(
+		scene_root, NodePath(str(options.get("target_node", _default_female_path_string())))
+	)
 	var character := scene_root.get_node_or_null(target_path) as Node3D
 	if character == null:
 		_set_camera_follow_error("The edited scene has no camera-follow target at %s." % target_path)
@@ -272,7 +276,10 @@ func stop_editor_camera_follow() -> Dictionary:
 
 
 func load_editor_camera_program(program: Dictionary, auto_play: bool = true) -> Dictionary:
-	var requested_target := NodePath(str(program.get("target_node", str(FEMALE_PATH))))
+	var scene_root := EditorInterface.get_edited_scene_root()
+	var requested_target := _resolve_requested_character_path(
+		scene_root, NodePath(str(program.get("target_node", _default_female_path_string())))
+	)
 	var requested_viewport := clampi(int(program.get("viewport_index", 0)), 0, 3)
 	# A program carrying initial_view is reproducible from any current editor
 	# camera.  Apply the exact quaternion pose before confirming follow so the
@@ -596,7 +603,7 @@ func _build_dock() -> void:
 	_dock_content.add_child(_open_button)
 
 	_status_label = Label.new()
-	_status_label.text = "Open my_manual_rig_pose.tscn and frame the OTS shot."
+	_status_label.text = "Open the scene you want to capture and frame the OTS shot."
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_label.modulate = Color(0.9, 0.76, 0.38)
 	_dock_content.add_child(_status_label)
@@ -617,7 +624,7 @@ func _build_camera_calibration_panel() -> void:
 	title.add_theme_font_size_override("font_size", 14)
 	_dock_content.add_child(title)
 	var help := Label.new()
-	help.text = "Live editor view relative to IK_character. Quaternion XYZW is authoritative; Euler is only a readable angle view. Confirm follow to get G1 offsets from work zero."
+	help.text = "Live editor view relative to the resolved female character. Quaternion XYZW is authoritative; Euler is only a readable angle view. Confirm follow to get G1 offsets from work zero."
 	help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	help.modulate = Color(0.78, 0.82, 0.88)
 	_dock_content.add_child(help)
@@ -707,13 +714,60 @@ func _current_editor_camera() -> Camera3D:
 	return viewport.get_camera_3d() if viewport != null else null
 
 
+func _default_female_path_string() -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	return str(_resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path"))
+
+
+func _default_male_path_string() -> String:
+	var scene_root := EditorInterface.get_edited_scene_root()
+	return str(_resolve_character_path(scene_root, MALE_PATH, "MaleCarrier", "male_character_path"))
+
+
+func _resolve_character_path(scene_root: Node, legacy_path: NodePath, node_name: String, metadata_key: String) -> NodePath:
+	if scene_root == null:
+		return legacy_path
+	# A wrapper scene can declare its actual character paths without requiring
+	# this plugin to know the wrapper's hierarchy.
+	if scene_root.has_meta(metadata_key):
+		var metadata_path := NodePath(str(scene_root.get_meta(metadata_key)))
+		if scene_root.get_node_or_null(metadata_path) != null:
+			return metadata_path
+	if scene_root.get_node_or_null(legacy_path) != null:
+		return legacy_path
+	var matches: Array[Node] = []
+	_find_nodes_by_name(scene_root, node_name, matches)
+	if not matches.is_empty():
+		return scene_root.get_path_to(matches[0])
+	return legacy_path
+
+
+func _resolve_requested_character_path(scene_root: Node, requested_path: NodePath) -> NodePath:
+	if scene_root == null or scene_root.get_node_or_null(requested_path) != null:
+		return requested_path
+	var requested_name := str(requested_path).get_file()
+	if requested_name == "IK_character":
+		return _resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path")
+	if requested_name == "MaleCarrier":
+		return _resolve_character_path(scene_root, MALE_PATH, "MaleCarrier", "male_character_path")
+	return requested_path
+
+
+func _find_nodes_by_name(root: Node, node_name: String, matches: Array[Node]) -> void:
+	if root.name == node_name:
+		matches.append(root)
+	for child in root.get_children():
+		_find_nodes_by_name(child, node_name, matches)
+
+
 func _camera_measurement_character() -> Node3D:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return null
 	if is_instance_valid(_camera_follow_character):
 		return _camera_follow_character
-	return scene_root.get_node_or_null(FEMALE_PATH) as Node3D
+	var female_path := _resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path")
+	return scene_root.get_node_or_null(female_path) as Node3D
 
 
 func _camera_relative_transform() -> Transform3D:
@@ -851,7 +905,7 @@ func _copy_current_character_transform() -> void:
 	## in the same XYZW order accepted by the pose-stream receiver.
 	var character := _camera_measurement_character()
 	if character == null:
-		_camera_coordinate_status.text = "Open a scene containing IK_character first."
+		_camera_coordinate_status.text = "Open a scene containing a resolvable female character first."
 		return
 	var p := character.position
 	var q := character.quaternion.normalized()
@@ -937,8 +991,10 @@ func _capture_current_editor_camera() -> void:
 	if scene_root == null:
 		_finish_with_error("Open an editable 3D scene before capturing.")
 		return
-	if scene_root.get_node_or_null(FEMALE_PATH) == null or scene_root.get_node_or_null(MALE_PATH) == null:
-		_finish_with_error("The scene needs both IK_character and MaleCarrier nodes.")
+	var female_path := _resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path")
+	var male_path := _resolve_character_path(scene_root, MALE_PATH, "MaleCarrier", "male_character_path")
+	if scene_root.get_node_or_null(female_path) == null or scene_root.get_node_or_null(male_path) == null:
+		_finish_with_error("The scene needs a female character and a male carrier. The plugin searched the scene hierarchy and its character-path metadata.")
 		return
 
 	var editor_viewport := EditorInterface.get_editor_viewport_3d(_viewport_choice.get_selected_id())
@@ -976,8 +1032,8 @@ func _capture_current_editor_camera() -> void:
 		return
 	capture_scene.name = "OTSCaptureScene"
 	capture_viewport.add_child(capture_scene)
-	var female_root := capture_scene.get_node_or_null(FEMALE_PATH)
-	var male_root := capture_scene.get_node_or_null(MALE_PATH)
+	var female_root := capture_scene.get_node_or_null(female_path)
+	var male_root := capture_scene.get_node_or_null(male_path)
 	var geometry := _collect_geometry(capture_scene)
 	if geometry.is_empty():
 		capture_viewport.queue_free()
@@ -1170,6 +1226,8 @@ func _record_editor_camera_video() -> void:
 	if scene_root == null:
 		_finish_video_with_error("Open an editable 3D scene before recording.")
 		return
+	var female_path := _resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path")
+	var male_path := _resolve_character_path(scene_root, MALE_PATH, "MaleCarrier", "male_character_path")
 	if not _recording_fixed_step_active:
 		_begin_fixed_step_capture(scene_root)
 
@@ -1296,7 +1354,7 @@ func _record_editor_camera_video() -> void:
 				_recording_walk_controller.get("preview_time_seconds")
 			)
 		timing_sample["camera_program_time_seconds"] = _camera_program_elapsed
-		var sampled_character := scene_root.get_node_or_null(FEMALE_PATH) as Node3D
+		var sampled_character := scene_root.get_node_or_null(female_path) as Node3D
 		if sampled_character != null:
 			timing_sample["character_position"] = [
 				sampled_character.global_position.x,
@@ -1856,8 +1914,8 @@ func _write_camera_metadata(
 			"keep_aspect": int(camera.keep_aspect),
 		},
 		"actors": {
-			"female": str(FEMALE_PATH),
-			"male_carrier": str(MALE_PATH),
+			"female": _default_female_path_string(),
+			"male_carrier": _default_male_path_string(),
 		},
 		"passes": {
 			"beauty": "beauty.png",
@@ -1940,6 +1998,10 @@ func _write_video_metadata(
 		"color_space": "BT.709 limited range",
 		"video": "editor_camera_motion.mp4",
 		"ffmpeg_path": ffmpeg_path,
+		"actors": {
+			"female": str(_default_female_path_string()),
+			"male_carrier": str(_default_male_path_string()),
+		},
 		"scene_sampling": {
 			"mode": "live_editor_scene_to_isolated_render_copy",
 			"node_transform_bindings": (live_scene_bindings.get("nodes", []) as Array).size(),

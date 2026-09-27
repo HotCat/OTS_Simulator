@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 
-const BONE_NAMES: Array[StringName] = [
+const COMMON_BONE_NAMES: Array[StringName] = [
 	&"Hips",
 	&"Spine",
 	&"Chest",
@@ -16,9 +16,8 @@ const BONE_NAMES: Array[StringName] = [
 	&"RightHand",
 	&"Neck",
 	&"Head",
-	&"Ponytail_Bone1",
-	&"Ponytail_Bone2",
 ]
+const FEMALE_EXTRA_BONE_NAMES: Array[StringName] = [&"Ponytail_Bone1", &"Ponytail_Bone2"]
 const EULER_ORDER := EULER_ORDER_YXZ
 const PoseStreamServer = preload("res://scripts/pose_stream_server.gd")
 
@@ -29,6 +28,8 @@ var _status_label: Label
 var _selected_bone: StringName = &"Hips"
 var _updating_fields := false
 var _editor_pose_server: Node
+var _bound_skeleton: Skeleton3D
+var _bound_bone_names: Array[StringName] = []
 
 func _enter_tree() -> void:
 	_build_panel()
@@ -41,6 +42,7 @@ func _enter_tree() -> void:
 	scene_changed.connect(_on_scene_changed)
 	_start_editor_pose_server()
 	_select_bone(_selected_bone)
+	set_process(true)
 
 func _exit_tree() -> void:
 	if scene_changed.is_connected(_on_scene_changed):
@@ -170,7 +172,7 @@ func _build_panel() -> void:
 	bone_scroll.add_child(bone_list)
 
 	var button_group := ButtonGroup.new()
-	for bone_name in BONE_NAMES:
+	for bone_name in _bone_names_for_skeleton(_find_skeleton()):
 		var button := Button.new()
 		button.text = bone_name
 		button.toggle_mode = true
@@ -239,6 +241,58 @@ func _build_panel() -> void:
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status_label.modulate = Color(0.9, 0.76, 0.38)
 	content.add_child(_status_label)
+
+func _process(_delta: float) -> void:
+	var selected_skeleton := _selected_skeleton()
+	var resolved := selected_skeleton if selected_skeleton != null else _find_skeleton()
+	if resolved != _bound_skeleton:
+		_bound_skeleton = resolved
+		_rebuild_bone_buttons()
+		_refresh_rotation_fields()
+
+func _rebuild_bone_buttons() -> void:
+	if not is_instance_valid(_panel):
+		return
+	var list := _panel.find_child("BoneList", true, false) as VBoxContainer
+	if list == null:
+		return
+	for child in list.get_children():
+		child.queue_free()
+	_bone_buttons.clear()
+	var group := ButtonGroup.new()
+	for bone_name in _bone_names_for_skeleton(_bound_skeleton):
+		var button := Button.new()
+		button.text = bone_name
+		button.toggle_mode = true
+		button.button_group = group
+		button.focus_mode = Control.FOCUS_CLICK
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.pressed.connect(_select_bone.bind(bone_name))
+		list.add_child(button)
+		_bone_buttons[bone_name] = button
+	_select_bone(_selected_bone if _bone_buttons.has(_selected_bone) else (_bone_names_for_skeleton(_bound_skeleton)[0] if not _bone_names_for_skeleton(_bound_skeleton).is_empty() else &"Hips"))
+
+func _bone_names_for_skeleton(skeleton: Skeleton3D) -> Array[StringName]:
+	var names: Array[StringName] = []
+	for bone_name in COMMON_BONE_NAMES:
+		if skeleton != null and skeleton.find_bone(bone_name) >= 0:
+			names.append(bone_name)
+	if skeleton != null:
+		for bone_name in FEMALE_EXTRA_BONE_NAMES:
+			if skeleton.find_bone(bone_name) >= 0:
+				names.append(bone_name)
+	return names
+
+func _selected_skeleton() -> Skeleton3D:
+	var selected := EditorInterface.get_selection().get_selected_nodes()
+	for node in selected:
+		if node is Skeleton3D:
+			return node as Skeleton3D
+		var skeleton := (node as Node).get_node_or_null("Skeleton3D") as Skeleton3D
+		if skeleton != null:
+			return skeleton
+	return null
 
 func _select_bone(bone_name: StringName) -> void:
 	_selected_bone = bone_name
@@ -317,15 +371,36 @@ func _after_rotation_change() -> void:
 	_refresh_rotation_fields()
 
 func _find_skeleton() -> Skeleton3D:
+	var selected := _selected_skeleton()
+	if selected != null:
+		return selected
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return null
-	var skeleton := scene_root.get_node_or_null("IK_character/Skeleton3D") as Skeleton3D
-	if skeleton == null and scene_root.name == "IK_character":
-		skeleton = scene_root.get_node_or_null("Skeleton3D") as Skeleton3D
-	if skeleton == null:
-		skeleton = scene_root.find_child("Skeleton3D", true, false) as Skeleton3D
-	return skeleton
+	# Prefer the female character explicitly. In OTSCarryClayProxy the male
+	# carrier is also a Skeleton3D, so a generic find_child("Skeleton3D") can
+	# silently bind the Quick FK panel to MaleCarrier instead of IK_character.
+	var character_candidates: Array[Node] = []
+	for character_path in [
+		NodePath("IK_character"),
+		NodePath("ManualCarryBlock/IK_character"),
+	]:
+		var candidate := scene_root.get_node_or_null(character_path)
+		if candidate != null:
+			character_candidates.append(candidate)
+	if scene_root.name == "IK_character":
+		character_candidates.append(scene_root)
+	if character_candidates.is_empty():
+		_find_nodes_by_name(scene_root, &"IK_character", character_candidates)
+	if character_candidates.size() != 1:
+		return null
+	return character_candidates[0].get_node_or_null("Skeleton3D") as Skeleton3D
+
+func _find_nodes_by_name(node: Node, wanted_name: StringName, matches: Array[Node]) -> void:
+	for child in node.get_children():
+		if child.name == wanted_name:
+			matches.append(child)
+		_find_nodes_by_name(child, wanted_name, matches)
 
 func _find_selected_bone(skeleton: Skeleton3D) -> int:
 	if skeleton == null:

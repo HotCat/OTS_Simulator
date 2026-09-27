@@ -49,6 +49,16 @@
   :type 'string
   :group 'godot-camera)
 
+(defcustom godot-camera-carrier-trajectory-node "OTSCarryClayProxy"
+  "Scene-relative node owning the carrier trajectory restart action."
+  :type 'string
+  :group 'godot-camera)
+
+(defcustom godot-camera-ots-carry-node "OTSCarryClayProxy"
+  "Scene-relative node owning the OTS carry AnimationPlayer."
+  :type 'string
+  :group 'godot-camera)
+
 (defcustom godot-character-node "IK_character"
   "Scene-relative character node used by the pose-stream commands."
   :type 'string
@@ -638,6 +648,33 @@ another AnimationPlayer library entry with the same current-transform policy."
   (interactive)
   (godot-walk--send "walk.refresh_trajectory"))
 
+;;;###autoload
+(defun godot-carrier-restart-trajectory ()
+  "Trigger OTSCarryClayProxy's `Restart carrier at trajectory start' action.
+
+This is separate from `godot-female-walk-restart', which restarts the legacy
+FemaleWalkController.  The trajectory owner is configurable through
+`godot-camera-carrier-trajectory-node'."
+  (interactive)
+  (godot-camera--send
+   "walk.trajectory.restart"
+   `("target_node" . ,godot-camera-carrier-trajectory-node)))
+
+;;;###autoload
+(cl-defun godot-ots-carry-play-walk-cycle (&optional (restart t))
+  "Play the OTS carry `ots_carry_walk_cycle' animation in the editor.
+
+With RESTART non-nil (the default), reset the carrier trajectory and start the
+animation at time zero. A prefix argument disables the trajectory reset and
+continues/starts the animation at its current trajectory position. The
+AnimationPlayer and animation name are resolved by the OTS carry scene."
+  (interactive (list (not current-prefix-arg)))
+  (godot-camera--send
+   "walk.ots_carry.play"
+   `("target_node" . ,godot-camera-ots-carry-node)
+   `("animation" . "ots_carry_walk_cycle")
+   `("restart" . ,(if restart t :json-false))))
+
 (defun godot-walk--motion-source-name (source)
   "Normalize SOURCE to the Godot motion-source protocol name."
   (let ((name (cond ((symbolp source) (symbol-name source))
@@ -725,6 +762,10 @@ recording still stops the active take."
 (defalias 'godot-walk-restart #'godot-female-walk-restart)
 (defalias 'godot-walk-refresh-trajectory
   #'godot-female-walk-refresh-trajectory)
+(defalias 'godot-walk-restart-carrier-trajectory
+  #'godot-carrier-restart-trajectory)
+(defalias 'godot-ots-carry-play
+  #'godot-ots-carry-play-walk-cycle)
 (defalias 'godot-walk-set-motion-source
   #'godot-female-walk-set-motion-source)
 (defalias 'godot-walk-record-camera-motion
