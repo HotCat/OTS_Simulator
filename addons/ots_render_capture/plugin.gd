@@ -76,6 +76,7 @@ var _camera_program_loaded := false
 var _camera_program_playing := false
 var _camera_program_elapsed := 0.0
 var _orbit_reference: Marker3D
+var _orbit_selection_attempts := 0
 var _camera_coordinate_status: Label
 var _camera_coordinate_values: Label
 var _camera_orbit_status: Label
@@ -764,8 +765,14 @@ func _camera_measurement_character() -> Node3D:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if scene_root == null:
 		return null
-	if is_instance_valid(_camera_follow_character):
+	# Do not retain a character node from a previously edited scene. The OTS
+	# dock survives scene switches, so a stale follow reference otherwise makes
+	# the pivot button operate on an invisible node outside the current scene.
+	if is_instance_valid(_camera_follow_character) and \
+			_camera_follow_character.is_inside_tree() and \
+			(scene_root == _camera_follow_character or scene_root.is_ancestor_of(_camera_follow_character)):
 		return _camera_follow_character
+	_camera_follow_character = null
 	var female_path := _resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path")
 	return scene_root.get_node_or_null(female_path) as Node3D
 
@@ -844,21 +851,50 @@ func _create_or_select_orbit_reference() -> void:
 	var scene_root := EditorInterface.get_edited_scene_root()
 	if character == null or scene_root == null:
 		return
+	# Ensure both existing and newly-created markers inside a nested character
+	# instance are editable to the scene currently shown in the editor.
+	scene_root.set_editable_instance(character, true)
 	if not is_instance_valid(_orbit_reference):
 		_orbit_reference = character.get_node_or_null(NodePath(CAMERA_REFERENCE_NAME)) as Marker3D
 	if not is_instance_valid(_orbit_reference):
 		_orbit_reference = Marker3D.new()
 		_orbit_reference.name = CAMERA_REFERENCE_NAME
 		_orbit_reference.gizmo_extents = 0.35
+		_orbit_reference.visible = true
 		character.add_child(_orbit_reference)
 		_orbit_reference.owner = scene_root
 		_orbit_reference.position = Vector3(0.0, 1.2, 0.0)
 		_orbit_reference.set_meta("ots_camera_orbit_reference", true)
+	EditorInterface.mark_scene_as_unsaved()
+	_camera_orbit_status.text = "Pivot created; waiting for the editor gizmo…"
+	# A child added to a nested editable instance can enter the SceneTree one
+	# editor frame after add_child(). EditorSelection.add_node() rejects nodes
+	# that are not inside the tree, so defer selection/focus until Godot has
+	# attached the marker. This also handles an existing marker after a scene
+	# switch or plugin reload.
+	_orbit_selection_attempts = 0
+	call_deferred("_select_orbit_reference_when_ready")
+	_update_camera_coordinate_panel()
+
+
+func _select_orbit_reference_when_ready() -> void:
+	if not is_instance_valid(_orbit_reference):
+		return
+	if not _orbit_reference.is_inside_tree():
+		_orbit_selection_attempts += 1
+		if _orbit_selection_attempts < 8:
+			call_deferred("_select_orbit_reference_when_ready")
+		else:
+			_camera_orbit_status.text = "Pivot exists but is not inside the edited scene tree; reload the scene once."
+		return
+	_orbit_selection_attempts = 0
 	var selection := EditorInterface.get_selection()
 	selection.clear()
 	selection.add_node(_orbit_reference)
+	# Selection alone is not enough for nodes inside an editable scene instance;
+	# edit_node makes the 3D editor activate the node's transform gizmo.
+	EditorInterface.edit_node(_orbit_reference)
 	_camera_orbit_status.text = "Marker selected; drag its gizmo, then copy G2."
-	_update_camera_coordinate_panel()
 
 
 func _copy_current_g1_target() -> void:
@@ -1462,9 +1498,11 @@ func _record_editor_camera_video() -> void:
 
 func _begin_fixed_step_capture(scene_root: Node) -> void:
 	_recording_fixed_step_active = true
-	_recording_walk_controller = scene_root.find_child("FemaleWalkController", true, false)
-	if _recording_walk_controller == null:
-		_recording_walk_controller = _find_fixed_step_controller(scene_root)
+	# Prefer the scene's own fixed-step owner.  OTS carry scenes can retain a
+	# disabled legacy FemaleWalkController for compatibility, but selecting it
+	# first would bypass OTSCarryClayProxy's AnimationPlayer and make the carry
+	# gait run on the editor wall clock instead of one step per output frame.
+	_recording_walk_controller = _find_fixed_step_controller(scene_root)
 	_recording_walk_was_playing = false
 	if is_instance_valid(_recording_walk_controller) and \
 			_recording_walk_controller.has_method("editor_capture_begin_fixed_step"):
