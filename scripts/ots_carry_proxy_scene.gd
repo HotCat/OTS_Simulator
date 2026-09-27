@@ -143,6 +143,7 @@ var _carrier_foot_was_contact := {"left": false, "right": false}
 var _capture_fixed_step_active := false
 var _capture_player_was_playing := false
 var _capture_player_animation := StringName()
+var _capture_player_position := 0.0
 
 func _ready() -> void:
 	# AnimationPlayer evaluates at the default priority. Run the contact solve
@@ -183,6 +184,7 @@ func editor_capture_begin_fixed_step() -> Dictionary:
 	_capture_fixed_step_active = true
 	_capture_player_was_playing = player != null and player.is_playing()
 	_capture_player_animation = player.current_animation if player != null else StringName()
+	_capture_player_position = player.current_animation_position if player != null else 0.0
 	if _capture_player_was_playing:
 		# pause() preserves the evaluated pose and current animation position;
 		# editor_capture_step_fixed() advances it explicitly below.
@@ -201,10 +203,16 @@ func editor_capture_step_fixed(delta_seconds: float) -> Dictionary:
 	if not _capture_fixed_step_active:
 		return {"ok": false, "error": "ots_capture_fixed_step_not_active"}
 	if player != null and _capture_player_was_playing and step > 0.0:
-		# AnimationPlayer.advance() is deliberately used instead of seek(): it
-		# preserves loop wrapping and all animation callbacks while remaining
-		# independent of the editor's wall-clock process interval.
-		player.advance(step)
+		# Seek the paused player explicitly.  AnimationPlayer.advance() depends
+		# on its playback state in some Godot editor builds; seek(..., true) is
+		# deterministic while still evaluating every keyed bone at this frame.
+		var animation := player.get_animation(_capture_player_animation)
+		_capture_player_position += step
+		if animation != null and animation.loop_mode != 0 and animation.length > 0.0001:
+			_capture_player_position = fposmod(_capture_player_position, animation.length)
+		elif animation != null:
+			_capture_player_position = minf(_capture_player_position, animation.length)
+		player.seek(_capture_player_position, true)
 	_apply_carrier_trajectory(step)
 	_apply_female_pelvis_attachment(step)
 	_apply_secondary_motion(step)
@@ -223,6 +231,7 @@ func editor_capture_end_fixed_step(was_playing: bool = false) -> Dictionary:
 	_capture_player_was_playing = false
 	if should_resume and player != null and not _capture_player_animation.is_empty():
 		player.play(_capture_player_animation)
+		player.seek(_capture_player_position, true)
 	return {
 		"ok": true,
 		"resumed": should_resume,
@@ -583,7 +592,7 @@ func _apply_secondary_motion(delta: float) -> void:
 	var player := get_node_or_null("OTSCarryAnimationPlayer") as AnimationPlayer
 	if player == null:
 		return
-	if not secondary_motion_when_stopped and not player.is_playing():
+	if not secondary_motion_when_stopped and not player.is_playing() and not _capture_fixed_step_active:
 		return
 	var skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
 	var male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
