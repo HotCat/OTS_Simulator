@@ -1386,9 +1386,13 @@ func _record_editor_camera_video() -> void:
 		_copy_camera(editor_camera, capture_camera, Vector2(resolution))
 		var timing_sample := _serialize_camera_sample(capture_camera, frame_index, fps)
 		if is_instance_valid(_recording_walk_controller):
-			timing_sample["walk_time_seconds"] = float(
-				_recording_walk_controller.get("preview_time_seconds")
-			)
+			# FemaleWalkController exposes preview_time_seconds, while the OTS
+			# controller owns its timeline inside AnimationPlayer.  Object.get()
+			# returns null for that missing legacy property; converting null with
+			# float() raises "Nonexistent float constructor" in Godot 4.7.
+			var walk_time_value = _recording_walk_controller.get("preview_time_seconds")
+			if walk_time_value != null:
+				timing_sample["walk_time_seconds"] = float(walk_time_value)
 		timing_sample["camera_program_time_seconds"] = _camera_program_elapsed
 		var sampled_character := scene_root.get_node_or_null(female_path) as Node3D
 		if sampled_character != null:
