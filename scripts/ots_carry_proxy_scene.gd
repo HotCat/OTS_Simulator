@@ -137,6 +137,12 @@ var _trajectory_marker_signature := ""
 var _carrier_previous_feet := {"left": Vector3.ZERO, "right": Vector3.ZERO}
 var _carrier_foot_anchors := {"left": Vector3.ZERO, "right": Vector3.ZERO}
 var _carrier_foot_was_contact := {"left": false, "right": false}
+## OTS Render Capture calls this fixed-step contract while encoding a video.
+## Keeping the AnimationPlayer paused between explicit steps prevents a slow
+## JPEG/FFmpeg frame from advancing the gait by wall-clock time.
+var _capture_fixed_step_active := false
+var _capture_player_was_playing := false
+var _capture_player_animation := StringName()
 
 func _ready() -> void:
 	# AnimationPlayer evaluates at the default priority. Run the contact solve
@@ -145,6 +151,7 @@ func _ready() -> void:
 	process_priority = 100
 	_apply_carry_shot_visibility()
 	_capture_carrier_baseline()
+	_normalize_female_root_scale()
 	_rebuild_carrier_trajectory()
 	_capture_secondary_baseline_if_needed()
 	_configure_hand_contact_ik()
@@ -159,11 +166,68 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if Engine.is_editor_hint():
 		_apply_carry_shot_visibility()
+	if _capture_fixed_step_active:
+		return
 	_apply_carrier_trajectory(_delta)
 	_apply_female_pelvis_attachment(_delta)
 	_apply_secondary_motion(_delta)
 	_update_female_contact_markers()
 	_configure_hand_contact_ik()
+
+
+## Fixed-step editor video hooks.  These mirror FemaleWalkController's hooks
+## but advance the OTS AnimationPlayer and its procedural attachment layers as
+## one deterministic unit per encoded frame.
+func editor_capture_begin_fixed_step() -> Dictionary:
+	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
+	_capture_fixed_step_active = true
+	_capture_player_was_playing = player != null and player.is_playing()
+	_capture_player_animation = player.current_animation if player != null else StringName()
+	if _capture_player_was_playing:
+		# pause() preserves the evaluated pose and current animation position;
+		# editor_capture_step_fixed() advances it explicitly below.
+		player.pause()
+	return {
+		"ok": true,
+		"was_playing": _capture_player_was_playing,
+		"animation": str(_capture_player_animation),
+		"animation_time_seconds": player.current_animation_position if player != null else 0.0,
+	}
+
+
+func editor_capture_step_fixed(delta_seconds: float) -> Dictionary:
+	var step := maxf(0.0, delta_seconds)
+	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
+	if not _capture_fixed_step_active:
+		return {"ok": false, "error": "ots_capture_fixed_step_not_active"}
+	if player != null and _capture_player_was_playing and step > 0.0:
+		# AnimationPlayer.advance() is deliberately used instead of seek(): it
+		# preserves loop wrapping and all animation callbacks while remaining
+		# independent of the editor's wall-clock process interval.
+		player.advance(step)
+	_apply_carrier_trajectory(step)
+	_apply_female_pelvis_attachment(step)
+	_apply_secondary_motion(step)
+	_update_female_contact_markers()
+	_configure_hand_contact_ik()
+	return {
+		"ok": true,
+		"animation_time_seconds": player.current_animation_position if player != null else 0.0,
+	}
+
+
+func editor_capture_end_fixed_step(was_playing: bool = false) -> Dictionary:
+	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
+	var should_resume := _capture_player_was_playing or was_playing
+	_capture_fixed_step_active = false
+	_capture_player_was_playing = false
+	if should_resume and player != null and not _capture_player_animation.is_empty():
+		player.play(_capture_player_animation)
+	return {
+		"ok": true,
+		"resumed": should_resume,
+		"animation": str(_capture_player_animation),
+	}
 
 func restart_carrier_trajectory() -> void:
 	_trajectory_progress = 0.0
@@ -226,10 +290,11 @@ func _capture_carrier_baseline() -> void:
 	_carrier_baseline_initialized = true
 
 func _apply_carrier_trajectory(delta: float) -> void:
-	var player := get_node_or_null("OTSCarryAnimationPlayer") as AnimationPlayer
+	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
 	var carrier := get_node_or_null(carrier_root_path) as Node3D
 	var preview_allowed := not Engine.is_editor_hint() or preview_trajectory_in_editor
-	var active := carrier_trajectory_enabled and preview_allowed and player != null and player.is_playing()
+	var active := carrier_trajectory_enabled and preview_allowed and player != null and \
+		(player.is_playing() or _capture_fixed_step_active)
 	if not active:
 		if _trajectory_was_active and Engine.is_editor_hint() and restore_carrier_when_preview_stops and carrier != null and _carrier_baseline_initialized:
 			carrier.global_transform = _carrier_initial_transform
@@ -474,7 +539,33 @@ func _apply_female_pelvis_attachment(delta: float) -> void:
 		return
 	_attachment_updating = true
 	female.global_transform = correction * female.global_transform
+	_normalize_female_root_scale()
 	_attachment_updating = false
+
+
+func _normalize_female_root_scale() -> void:
+	"""Remove tiny accidental root scale drift without changing the pose.
+
+	Bone calibration and repeated transform composition can turn an intended
+	rotation matrix into a basis with values such as (0.9997, 0.9982, 0.9994).
+	Godot propagates that drift to IK_character/MainCollider and displays the
+	"non-uniform scale" node warning. Orthonormalizing only the root basis keeps
+	the current world position and orientation, leaves all bone poses untouched,
+	and restores the collider's required uniform scale.
+	"""
+	var female := get_node_or_null("ManualCarryBlock/IK_character") as Node3D
+	if female == null:
+		return
+	var current := female.global_transform
+	var current_scale := current.basis.get_scale()
+	if absf(current_scale.x - 1.0) < 0.0001 and \
+			absf(current_scale.y - 1.0) < 0.0001 and \
+			absf(current_scale.z - 1.0) < 0.0001:
+		return
+	current.basis = current.basis.orthonormalized()
+	female.global_transform = current
+	if Engine.is_editor_hint():
+		EditorInterface.mark_scene_as_unsaved()
 
 func _reset_pelvis_follow_filter() -> void:
 	_follow_target_initialized = false
