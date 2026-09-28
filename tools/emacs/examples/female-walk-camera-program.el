@@ -251,6 +251,8 @@ I also notice that the character rotate to the collapse initial position, that i
 
 (godot-walk-restart-carrier-trajectory)
 
+(godot-ots-carry-play-walk-cycle)
+
 
 (godot-camera-confirm-follow
    :target-node "MaleCarrier"

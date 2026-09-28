@@ -17,6 +17,7 @@
 
 
 
+
 (defun ots-walk-camera-shot ()
   (interactive)
 
@@ -34,25 +35,24 @@
 
   (godot-camera-g4 :seconds 0.1)
 
-  ;; (godot-camera-g1 :x 5.7428 :y 0.2211 :z 3.4742
-  ;; 		   :duration 2.0
-  ;; 		   :easing 'smooth)
-
-  (godot-camera-g3-orbit :degrees 30.88 :pivot '(0.0 1.2 0.0)
-			 :duration 6.0
-			 :easing 'smooth)
+  (godot-camera-g3-orbit
+   :degrees 20.88
+   :pivot '(0.0 1.2 0.0)
+   :duration 7.0
+   :easing 'smooth)
 
   (godot-camera-g4 :seconds 0.75)
 
-  ;; Auto-duration needs the program loaded before recording starts.
+  ;; Load the camera program without starting it yet.
   (godot-camera-send-program :play nil)
 
+  ;; Start the OTS carrier animation.
   (godot-ots-carry-play-walk-cycle)
 
-  ;; The camera program above is 6.85 seconds (0.1 + 6.0 + 0.75).  Use a
-  ;; manual duration for a nine-second proxy take; the camera holds its final
-  ;; program pose for the remaining 2.15 seconds.  Omit :resolution so the
-  ;; recorder matches the selected editor viewport's pixel size automatically.
+  ;; Record exactly 9 seconds and match the selected viewport resolution.
+  ;; The camera program itself is 7.85 seconds (0.1 + 7.0 + 0.75), so the
+  ;; recorder holds the final camera pose for the remaining 1.15 seconds.
+  ;; Do not provide :resolution: auto-resolution follows the chosen viewport.
   (godot-walk-record-camera-motion
    :duration 9.0
    :fps 24
@@ -60,10 +60,9 @@
    :auto-resolution t
    :viewport 1)
 
-
+  ;; Start the camera program after recording has been prepared.
   (godot-camera-play t))
 
 
 (godot-camera-release-follow)
-
 
