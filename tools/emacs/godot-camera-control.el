@@ -236,7 +236,8 @@ rotation_degrees fallback is retained for hand-authored legacy programs.")
 
 ;;;###autoload
 (cl-defun godot-camera-confirm-follow
-    (&key (target-node godot-camera-default-target) (viewport 1))
+    (&key (target-node godot-camera-default-target) (viewport 1)
+          smoothing-seconds)
   "Make the current editor camera work zero relative to TARGET-NODE.
 
 VIEWPORT is the human-facing 1-based editor viewport number.  The character's
@@ -247,8 +248,24 @@ translation and heading are inherited until `godot-camera-release-follow'."
   (godot-camera--send
    "camera.follow.confirm"
    `("options" . (("target_node" . ,target-node)
-                   ("viewport_index" . ,(1- viewport)))))
+                   ("viewport_index" . ,(1- viewport))
+                   ,@(when smoothing-seconds
+                       `(("smoothing_seconds" . ,smoothing-seconds))))))
   (message "Asked Godot to confirm viewport %d camera work zero" viewport))
+
+;;;###autoload
+(cl-defun godot-camera-confirm-carrier-trajectory-follow
+    (&key (viewport 1) (smoothing-seconds 0.12))
+  "Follow the predefined OTS carrier route without inheriting gait jitter.
+
+The semantic `CarrierTrajectory' target resolves to the evaluated carrier root
+transform.  SMOOTHING-SECONDS filters only route translation/heading; it never
+reads the male skeleton torso or foot bones."
+  (interactive)
+  (godot-camera-confirm-follow
+   :target-node "CarrierTrajectory"
+   :viewport viewport
+   :smoothing-seconds smoothing-seconds))
 
 ;;;###autoload
 (cl-defun godot-camera-program-begin
@@ -680,6 +697,37 @@ AnimationPlayer and animation name are resolved by the OTS carry scene."
    `("animation" . "ots_carry_walk_cycle")
    `("restart" . ,(if restart t :json-false))))
 
+;;;###autoload
+(cl-defun godot-ots-carry-play-animation (animation &optional (restart t))
+  "Play an arbitrary OTS AnimationPlayer animation in the editor.
+
+ANIMATION is the AnimationPlayer name, including its library namespace when
+needed.  This is useful for comparing the raw H3 capture, the corrected solve,
+and the conservative `h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid'
+clip without changing the scene's authored autoplay.  With RESTART non-nil,
+reset the carrier trajectory before playback."
+  (interactive
+   (list (read-string "OTS animation: "
+                     "h3_heavy_load_hybrid/ots_h3_heavy_load_hybrid")
+         (not current-prefix-arg)))
+  (godot-camera--send
+   "walk.ots_carry.play"
+   `("target_node" . ,godot-camera-ots-carry-node)
+   `("animation" . ,animation)
+   `("restart" . ,(if restart t :json-false))))
+
+;;;###autoload
+(defun godot-ots-carry-play-h3-heavy-load-hybrid (&optional restart)
+  "Play the conservative H3 heavy-load OTS gait.
+
+The clip keeps the authored lower-body OTS gait and applies the corrected H3
+load response to the upper body, avoiding the raw capture's abrupt spin and
+torso swing.  A prefix argument disables the trajectory reset."
+  (interactive "P")
+  (godot-ots-carry-play-animation
+   "h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid"
+   (not restart)))
+
 (defun godot-walk--motion-source-name (source)
   "Normalize SOURCE to the Godot motion-source protocol name."
   (let ((name (cond ((symbolp source) (symbol-name source))
@@ -771,6 +819,8 @@ request to OTS Render Capture directly."
 (defalias 'godot-walk-refresh-trajectory
   #'godot-female-walk-refresh-trajectory)
 (defalias 'godot-walk-restart-carrier-trajectory
+  #'godot-carrier-restart-trajectory)
+(defalias 'godot-walk-restart-carrier-at-trajectory-start
   #'godot-carrier-restart-trajectory)
 (defalias 'godot-ots-carry-play
   #'godot-ots-carry-play-walk-cycle)

@@ -803,6 +803,14 @@ click is synthesized:
 | `godot-female-walk-refresh-trajectory` | Refresh trajectory markers |
 | `godot-female-walk-record-camera-motion` | Start/stop recording; accepts manual or camera-program duration, FPS, resolution, delay, frame retention, and viewport options |
 
+For an OTS carry scene, the Godot Inspector button **Restart carrier at
+trajectory start** is available from Emacs as either
+`godot-walk-restart-carrier-at-trajectory-start` (the label-matching alias),
+`godot-walk-restart-carrier-trajectory`, or the descriptive
+`godot-carrier-restart-trajectory` function. All three send the same
+`walk.trajectory.restart` transport message to the node named by
+`godot-camera-carrier-trajectory-node` (default: `OTSCarryClayProxy`).
+
 For a scripted H3 guide take, the recording command can carry its video
 parameters directly instead of depending on the dock's last values:
 

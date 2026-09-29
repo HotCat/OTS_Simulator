@@ -1,12 +1,10 @@
 [gd_scene format=4 uid="uid://bohulec1mp0og"]
 
-[ext_resource type="PackedScene" uid="uid://dtdc3ty1wmd8k" path="res://assets/environments/coffebar_street/coffebar_street_with_jeep.glb" id="1_v57x5"]
 [ext_resource type="Script" uid="uid://r1abgjkodgmk" path="res://scripts/ots_pose_controller.gd" id="2_j4fov"]
 [ext_resource type="AnimationLibrary" uid="uid://cyaof44mkoxre" path="res://animations/female_walk_cycle.tres" id="3_xccq3"]
 [ext_resource type="AnimationLibrary" uid="uid://csqv0ijbjs44p" path="res://animations/female_walk_leg_wounded.tres" id="4_t7vli"]
 [ext_resource type="AnimationLibrary" uid="uid://ceh3le2wm2gb0" path="res://animations/female_walk_wounded_terminator.tres" id="5_k83go"]
 [ext_resource type="Script" uid="uid://670o28pb18j" path="res://scripts/walk_cycle_controller.gd" id="6_g1q3h"]
-[ext_resource type="PackedScene" uid="uid://gx03f3oeyugx" path="res://assets/models/vehicles/jeep_wrangler/jeep_wrangler_two_door_clay_proxy.glb" id="7_clay"]
 [ext_resource type="AnimationLibrary" uid="uid://brd5xq361sapo" path="res://animations/female_collapse_motion_0_3_68.tres" id="7_k83go"]
 [ext_resource type="PackedScene" uid="uid://d0d7tm4s717dl" path="res://assets/environments/coffebar_street/coffebar_street_clay_proxy.glb" id="8_clay_street"]
 [ext_resource type="AnimationLibrary" uid="uid://bxxw4rujymah7" path="res://animations/female_collapse_motion.tres" id="9_collapse"]
@@ -755,58 +753,10 @@ tonemap_mode = 2
 glow_enabled = true
 
 [node name="CoffeeBarFemaleWalkScene" type="Node3D" unique_id=302651471]
-editor_description = "Bicycle-free coffee-bar street with the rigged two-door Jeep and the complete female editor rig migrated from my_manual_rig_pose.tscn."
+editor_description = "Bicycle-free CoffeeBarStreet clay proxy with the complete female editor rig migrated from my_manual_rig_pose.tscn. Jeep geometry is intentionally omitted from this clay-only scene."
 metadata/female_rig_source = "res://demos/my_manual_rig_pose.tscn"
-metadata/street_asset_source = "res://assets/environments/coffebar_street/coffebar_street_with_jeep.glb"
+metadata/street_asset_source = "res://assets/environments/coffebar_street/coffebar_street_clay_proxy.glb"
 metadata/migration_note = "Source-exact female pose, 56-bone overrides, IK controls, walk trajectory, animations, and controller tuning"
-
-[node name="CoffeeBarStreet" parent="." unique_id=225577273 instance=ExtResource("1_v57x5")]
-visible = false
-metadata/contains_custom_two_door_jeep = true
-metadata/bicycle_free_frontage = true
-
-[node name="Curb" parent="CoffeeBarStreet" index="2" unique_id=206766518]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.2187934, 0.13, -1.48)
-
-[node name="Jeep_Street_Instance" parent="CoffeeBarStreet" index="297" unique_id=1439457022]
-transform = Transform3D(-0.15042323, 0, -0.9886217, 0, 1, 0, 0.9886217, 0, -0.15042323, -0.35, -0.055, 1.95)
-visible = false
-
-[node name="SAM3D_Hood" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Hood" parent_id_path=PackedInt32Array(225577273, 2122535286) index="0" unique_id=494081256]
-transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, -0.010831952, 0.7850355, -1.4864061)
-
-[node name="SAM3D_Door_L" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Door_L" parent_id_path=PackedInt32Array(225577273, 674036160) index="0" unique_id=1097917745]
-transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0.99280477, 0.65301466, -1.1050344)
-
-[node name="SAM3D_Door_R" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Door_R" parent_id_path=PackedInt32Array(225577273, 242712279) index="0" unique_id=141032214]
-transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, -1.0283926, 0.6608817, -1.1016822)
-
-[node name="FrontBumper_Center" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="10" unique_id=1349924947]
-transform = Transform3D(1, 0, -1.4901161e-08, -1.4901161e-08, 0, -1, 0, 1, 0, -0.04468012, -1.8863502, 0.23707676)
-
-[node name="FrontBumper_Wing_L" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="11" unique_id=951339246]
-transform = Transform3D(0.9902682, 0, -0.13917315, -0.13917316, 0, -0.99026823, 0, 1, 0, -0.8206246, -1.9287281, 0.26806974)
-
-[node name="FrontBumper_Wing_R" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="12" unique_id=1086280202]
-transform = Transform3D(0.9902681, 0, 0.13917315, 0.13917315, 0, -0.9902682, 0, 1, 0, 0.7505101, -1.870461, 0.22373354)
-
-[node name="FrontSkid" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="13" unique_id=908583881]
-transform = Transform3D(1, 0, -1.4901161e-08, -1.4901161e-08, 0, -1, 0, 1, 0, -0.022024632, 0.14475006, -0.6236788)
-
-[node name="RearBumper" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="14" unique_id=1374616394]
-transform = Transform3D(1, 0, -1.4901161e-08, -1.4901161e-08, 0, -1, 0, 1, 0, 0.03382337, 1.9177055, 0.2581823)
-
-[node name="SAM3D_Body" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="15" unique_id=1996829590]
-transform = Transform3D(1, 0, -1.4901161e-08, -1.4901161e-08, 0, -1, 0, 1, 0, -0.018162727, 0.11936884, -0.8015418)
-
-[node name="TowHook_+0_69" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="16" unique_id=648912448]
-transform = Transform3D(1, 0, -1.4901161e-08, -1.4901161e-08, 0, -1, 0, 1, 0, 0.64063585, -2.0155656, 0.22387707)
-
-[node name="TowHook_-0_69" parent="CoffeeBarStreet/Jeep_Street_Instance/Jeep_Rig/Skeleton3D/Body" parent_id_path=PackedInt32Array(225577273, 2054870481) index="17" unique_id=432412928]
-transform = Transform3D(1, 0, -1.4901161e-08, -1.4901161e-08, 0, -1, 0, 1, 0, -0.73713744, -2.0301998, 0.23578191)
-
-[node name="Jeep_Clay_Proxy" parent="." unique_id=1964669966 instance=ExtResource("7_clay")]
-transform = Transform3D(-0.15042323, 0, -0.9886217, 0, 1, 0, 0.9886217, 0, -0.15042323, -0.35, -0.055, 1.95)
 
 [node name="CoffeeBarStreet_Clay_Proxy" parent="." unique_id=442201260 instance=ExtResource("8_clay_street")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0065071583, 0)
@@ -1520,5 +1470,3 @@ omni_attenuation = 1.6
 transform = Transform3D(1, 0, 0, 0, 0.9991406, 0.041449063, 0, -0.041449063, 0.9991406, 0, 3.45, 18.7)
 current = true
 fov = 54.0
-
-[editable path="CoffeeBarStreet"]

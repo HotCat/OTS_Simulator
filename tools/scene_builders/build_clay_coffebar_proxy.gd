@@ -1,12 +1,15 @@
 extends SceneTree
 
-## Build a texture-free clay proxy for the evaluated coffee-bar street scene.
-## The current working scene is used as the source so editable overrides such
-## as the curb placement are baked into the proxy.  The Jeep subtree is
-## removed because the working scene supplies the dedicated clay Jeep proxy.
+## Build a texture-free, environment-only clay proxy for the coffee-bar street.
+## The generated street contains no Jeep or other vehicle; character scenes
+## can place their own blocking independently of this architectural asset.
 
-const SOURCE_SCENE := "res://demos/coffebar_female_walk_scene.tscn"
-const STREET_PATH := NodePath("CoffeeBarStreet")
+## Build directly from the regenerated environment GLB.  Using the composite
+## female-walk scene here kept Godot's cached nested GLB instance alive and
+## could leave an older storefront layout in the clay export after Blender
+## edits.  The street source is now environment-only, so direct instantiation
+## is both deterministic and preserves the current hollow right entrance.
+const SOURCE_SCENE := "res://assets/environments/coffebar_street/coffebar_street_with_jeep.glb"
 const OUTPUT_GLB := "res://assets/environments/coffebar_street/coffebar_street_clay_proxy.glb"
 const OUTPUT_TSCN := "res://assets/environments/coffebar_street/coffebar_street_clay_proxy.tscn"
 
@@ -25,10 +28,7 @@ func _build() -> void:
 		_fail("Source scene did not instantiate as Node3D")
 		return
 	root.add_child(evaluated_root)
-	var street := evaluated_root.get_node_or_null(STREET_PATH) as Node3D
-	if street == null:
-		_fail("Could not resolve CoffeeBarStreet")
-		return
+	var street := evaluated_root
 
 	var street_transform := street.transform
 	street.get_parent().remove_child(street)
@@ -37,7 +37,7 @@ func _build() -> void:
 	street.name = "CoffeeBarStreetClayProxy"
 	street.set_meta("proxy_source", SOURCE_SCENE)
 	street.set_meta("proxy_style", "neutral gray clay")
-	street.set_meta("proxy_note", "Evaluated coffee-bar street overrides baked; Jeep supplied separately")
+	street.set_meta("proxy_note", "Environment-only coffee-bar street; no vehicle geometry")
 
 	for child_name in ["Jeep_Street_Instance", "Jeep_Clay_Proxy"]:
 		var vehicle := street.get_node_or_null(child_name)

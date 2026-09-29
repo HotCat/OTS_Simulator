@@ -10,6 +10,8 @@ extends Node3D
 ## physically exact mocap solve.
 
 const HIDDEN_STAGE_NODES := ["stage", "WaistSupportWall", "AsymmetricObstacleField", "WalkTrajectory"]
+const MIN_REASONABLE_PELVIS_OFFSET_METERS := 0.05
+const MAX_REASONABLE_PELVIS_OFFSET_METERS := 1.50
 
 @export_category("Carrier Trajectory")
 @export var carrier_trajectory_enabled := true
@@ -55,7 +57,7 @@ var project_trajectory_action: Callable = project_trajectory_to_walk_plane
 		if Engine.is_editor_hint() and is_inside_tree():
 			if value:
 				_capture_editor_preview_baseline()
-			else:
+			elif not preview_procedural_motion_in_editor:
 				_restore_editor_preview_baseline()
 		preview_female_attachment_in_editor = value
 @export var carrier_shoulder_bone: StringName = &"RightShoulder"
@@ -75,7 +77,16 @@ var calibrate_attachment_action: Callable = calibrate_female_pelvis_attachment
 
 @export_category("Carried Secondary Motion")
 @export var secondary_motion_enabled := true
-@export var preview_procedural_motion_in_editor := false
+@export var preview_procedural_motion_in_editor := false:
+	set(value):
+		if preview_procedural_motion_in_editor == value:
+			return
+		if Engine.is_editor_hint() and is_inside_tree():
+			if value:
+				_capture_editor_preview_baseline()
+			elif not preview_female_attachment_in_editor:
+				_restore_editor_preview_baseline()
+		preview_procedural_motion_in_editor = value
 @export var secondary_motion_when_stopped := false
 @export_enum("Animation timeline", "Measured foot height") var rhythm_source := 0
 @export_range(0.1, 4.0, 0.01, "suffix:s") var gait_cycle_seconds := 1.0
@@ -115,6 +126,8 @@ var capture_dangle_baseline_action: Callable = capture_female_secondary_baseline
 var _attachment_updating := false
 var _editor_preview_baseline := Transform3D.IDENTITY
 var _editor_preview_has_baseline := false
+var _editor_preview_bone_baseline: Array[Transform3D] = []
+var _editor_preview_has_bone_baseline := false
 # The filtered attachment target is stored in carrier-root space. Filtering a
 # world-space target makes the carried character trail behind by roughly
 # walk_speed * lag_seconds for the entire walk, then visibly catch up when the
@@ -156,7 +169,12 @@ func _ready() -> void:
 	_rebuild_carrier_trajectory()
 	_capture_secondary_baseline_if_needed()
 	_configure_hand_contact_ik()
-	if auto_calibrate_pelvis_offset:
+	# Do not sample or rewrite the authored mounting offset while the editor is
+	# still instantiating inherited scenes and evaluating Skeleton3D modifiers.
+	# Runtime auto-calibration remains available for procedural scenes that do not
+	# store an authored offset; editor users should use the explicit Calibrate
+	# button after the pose is visibly settled.
+	if auto_calibrate_pelvis_offset and not Engine.is_editor_hint():
 		calibrate_female_pelvis_attachment()
 	# Never rewrite an authored female transform merely because the scene is
 	# open in the editor. Runtime playback still enables the rigid attachment,
@@ -249,6 +267,18 @@ func restart_carrier_trajectory() -> void:
 		_place_carrier_on_trajectory(carrier, 0.0)
 	if Engine.is_editor_hint():
 		EditorInterface.mark_scene_as_unsaved()
+
+
+func get_camera_follow_transform() -> Transform3D:
+	"""Return the stable, route-driven carrier transform for camera tracking.
+
+	The male skeleton can contain gait and foot-lock motion every frame.  Camera
+	follow should instead use the evaluated carrier root, whose position and
+	heading come only from the predefined CarrierTrajectory.  The OTS Render
+	dock calls this method when the semantic target is `CarrierTrajectory`.
+	"""
+	var carrier := get_node_or_null(carrier_root_path) as Node3D
+	return carrier.global_transform if carrier != null else global_transform
 
 
 func editor_transport_play_ots_carry(animation_name: String = "", restart: bool = true) -> Dictionary:
@@ -490,7 +520,20 @@ func calibrate_female_pelvis_attachment() -> void:
 	var transforms := _attachment_transforms()
 	if transforms.is_empty():
 		return
-	female_pelvis_in_shoulder = (transforms.shoulder as Transform3D).affine_inverse() * (transforms.pelvis as Transform3D)
+	var calibrated := (transforms.shoulder as Transform3D).affine_inverse() * (transforms.pelvis as Transform3D)
+	var offset_distance := calibrated.origin.length()
+	if offset_distance < MIN_REASONABLE_PELVIS_OFFSET_METERS or \
+			offset_distance > MAX_REASONABLE_PELVIS_OFFSET_METERS:
+		push_warning(
+			"OTS carry calibration rejected pelvis offset %.4f m; expected %.2f-%.2f m. " % [
+				offset_distance,
+				MIN_REASONABLE_PELVIS_OFFSET_METERS,
+				MAX_REASONABLE_PELVIS_OFFSET_METERS,
+			] +
+			"The skeleton may still be settling. Wait for the authored pose to appear, then press 'Calibrate pelvis to current shoulder pose'."
+		)
+		return
+	female_pelvis_in_shoulder = calibrated
 	_reset_pelvis_follow_filter()
 	if Engine.is_editor_hint():
 		EditorInterface.mark_scene_as_unsaved()
@@ -722,14 +765,35 @@ func _capture_editor_preview_baseline() -> void:
 		return
 	_editor_preview_baseline = female.global_transform
 	_editor_preview_has_baseline = true
+	var skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	if skeleton != null:
+		_editor_preview_bone_baseline.clear()
+		_editor_preview_bone_baseline.resize(skeleton.get_bone_count())
+		for bone_index in skeleton.get_bone_count():
+			_editor_preview_bone_baseline[bone_index] = skeleton.get_bone_pose(bone_index)
+		# A preview should be additive to the pose that is visible when the user
+		# enables it, not to a stale pose captured during scene construction.
+		_female_secondary_baseline = _editor_preview_bone_baseline.duplicate()
+		_secondary_baseline_initialized = true
+		_editor_preview_has_bone_baseline = true
 
 func _restore_editor_preview_baseline() -> void:
-	if not _editor_preview_has_baseline:
+	if not _editor_preview_has_baseline and not _editor_preview_has_bone_baseline:
 		return
 	var female := get_node_or_null("ManualCarryBlock/IK_character") as Node3D
 	if female != null:
-		female.global_transform = _editor_preview_baseline
+		if _editor_preview_has_baseline:
+			female.global_transform = _editor_preview_baseline
+	var skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	if skeleton != null and _editor_preview_has_bone_baseline and \
+			_editor_preview_bone_baseline.size() == skeleton.get_bone_count():
+		for bone_index in skeleton.get_bone_count():
+			skeleton.set_bone_pose(bone_index, _editor_preview_bone_baseline[bone_index])
+		skeleton.force_update_all_bone_transforms()
 	_editor_preview_has_baseline = false
+	_editor_preview_has_bone_baseline = false
+	_reset_pelvis_follow_filter()
+	_reset_secondary_rhythm()
 
 func _attachment_transforms() -> Dictionary:
 	var male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D

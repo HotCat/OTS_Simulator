@@ -64,6 +64,8 @@ var _camera_follow_character: Node3D
 var _camera_follow_target_path := FEMALE_PATH
 var _camera_follow_base_relative_transform := Transform3D.IDENTITY
 var _camera_follow_relative_transform := Transform3D.IDENTITY
+var _camera_follow_smoothed_target_transform := Transform3D.IDENTITY
+var _camera_follow_smoothing_seconds := 0.0
 ## Canonical, reproducible shot setup.  Keep the orientation as a quaternion;
 ## Euler angles are only a calibration/readout convenience and can suffer from
 ## gimbal singularities or multiple equivalent representations.
@@ -196,8 +198,38 @@ func _apply_camera_relative_transform(relative: Transform3D, character: Node3D, 
 	var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
 	if editor_camera == null:
 		return {"ok": false, "error": "editor_camera_missing", "viewport_index": viewport_index}
-	editor_camera.global_transform = character.global_transform * relative
+	editor_camera.global_transform = _camera_follow_target_transform(character) * relative
 	return {"ok": true}
+
+
+func _camera_follow_target_transform(target: Node3D, delta: float = -1.0) -> Transform3D:
+	"""Resolve a camera anchor without inheriting animated skeleton motion.
+
+	`CarrierTrajectory` is a semantic target in OTS shots. Its parent
+	`OTSCarryClayProxy` exposes the evaluated carrier-root transform, which is
+	owned by the predefined route rather than by the male's torso/feet bones.
+	"""
+	var target_transform := target.global_transform
+	var owner := target.get_parent()
+	if target.has_method("get_camera_follow_transform"):
+		target_transform = target.call("get_camera_follow_transform") as Transform3D
+	elif owner != null and owner.has_method("get_camera_follow_transform"):
+		target_transform = owner.call("get_camera_follow_transform") as Transform3D
+	var use_smoothing := _camera_follow_smoothing_seconds > 0.0001
+	if not use_smoothing:
+		return target_transform
+	if delta < 0.0:
+		return target_transform
+	var alpha := 1.0 - exp(-delta / maxf(0.001, _camera_follow_smoothing_seconds))
+	_camera_follow_smoothed_target_transform.origin = _camera_follow_smoothed_target_transform.origin.lerp(
+		target_transform.origin, alpha
+	)
+	_camera_follow_smoothed_target_transform.basis = Basis(
+		_camera_follow_smoothed_target_transform.basis.get_rotation_quaternion().slerp(
+			target_transform.basis.get_rotation_quaternion(), alpha
+		)
+	)
+	return _camera_follow_smoothed_target_transform
 
 
 func _camera_view_payload(relative: Transform3D) -> Dictionary:
@@ -240,6 +272,13 @@ func confirm_editor_camera_follow(options: Dictionary = {}) -> Dictionary:
 	_camera_follow_viewport_index = viewport_index
 	_camera_follow_base_relative_transform = character.global_transform.affine_inverse() \
 		* editor_camera.global_transform
+	_camera_follow_smoothing_seconds = float(options.get(
+		"smoothing_seconds",
+		0.12 if str(target_path).get_file() in ["CarrierTrajectory", "CarrierTrajectoryCameraTarget"] else 0.0
+	))
+	_camera_follow_smoothed_target_transform = _camera_follow_target_transform(character)
+	_camera_follow_base_relative_transform = _camera_follow_smoothed_target_transform.affine_inverse() \
+		* editor_camera.global_transform
 	_camera_work_zero_valid = true
 	_camera_follow_relative_transform = _camera_follow_base_relative_transform
 	_camera_follow_active = true
@@ -261,6 +300,7 @@ func confirm_editor_camera_follow(options: Dictionary = {}) -> Dictionary:
 		"target_node": str(target_path),
 		"viewport_index": viewport_index,
 		"distance": distance,
+		"smoothing_seconds": _camera_follow_smoothing_seconds,
 	}
 
 
@@ -429,7 +469,7 @@ func _process(delta: float) -> void:
 			editor_camera_program_state_changed.emit(
 				"finished", "Camera program finished; holding its final work coordinate."
 			)
-	editor_camera.global_transform = _camera_follow_character.global_transform \
+	editor_camera.global_transform = _camera_follow_target_transform(_camera_follow_character, delta) \
 		* _camera_follow_relative_transform
 	if refresh_calibration:
 		_update_camera_coordinate_panel()
@@ -586,7 +626,7 @@ func _build_dock() -> void:
 
 	_keep_video_frames = CheckButton.new()
 	_keep_video_frames.text = "Keep source JPEG frames"
-	_keep_video_frames.tooltip_text = "Normally the temporary JPEG sequence is deleted after MP4 encoding. Enable this for debugging or external encoders."
+	_keep_video_frames.tooltip_text = "Normally the OS-cache JPEG sequence is deleted after MP4 encoding. Enable this for debugging or external encoders; frames stay outside the Godot project."
 	_dock_content.add_child(_keep_video_frames)
 
 	_record_video_button = Button.new()
@@ -782,7 +822,7 @@ func _camera_relative_transform() -> Transform3D:
 	var camera := _current_editor_camera()
 	if character == null or not character.is_inside_tree() or camera == null or not camera.is_inside_tree():
 		return Transform3D.IDENTITY
-	return character.global_transform.affine_inverse() * camera.global_transform
+	return _camera_follow_target_transform(character).affine_inverse() * camera.global_transform
 
 
 func _update_camera_coordinate_panel() -> void:
@@ -796,7 +836,7 @@ func _update_camera_coordinate_panel() -> void:
 		_camera_orbit_status.text = "Create the pivot marker after opening the scene."
 		_camera_orbit_values.text = "Pivot: unavailable"
 		return
-	var relative := character.global_transform.affine_inverse() * camera.global_transform
+	var relative := _camera_follow_target_transform(character).affine_inverse() * camera.global_transform
 	var p := relative.origin
 	var quaternion := relative.basis.get_rotation_quaternion()
 	var degrees := relative.basis.get_euler() * 180.0 / PI
@@ -1287,11 +1327,34 @@ func _record_editor_camera_video() -> void:
 	var timestamp := Time.get_datetime_string_from_system().replace(":", "-")
 	var output_resource_path := "%s/%s-camera-motion" % [OUTPUT_ROOT, timestamp]
 	var output_directory := ProjectSettings.globalize_path(output_resource_path)
-	var frames_directory := output_directory.path_join("camera_motion_frames")
+	# The frame sequence used to be nested below this directory, which
+	# implicitly created the final output directory as a side effect. Since the
+	# JPEGs now live in the OS cache, create the project output directory
+	# explicitly so FFmpeg can write editor_camera_motion.mp4 and the metadata
+	# writer can create camera_motion.json there.
+	var output_directory_error := DirAccess.make_dir_recursive_absolute(output_directory)
+	if output_directory_error != OK:
+		_finish_video_with_error(
+			"Could not create output directory %s (error %d)." %
+			[output_directory, output_directory_error]
+		)
+		return
+	# Keep the high-volume intermediate JPEG sequence outside the project. Godot
+	# watches every directory below res://; writing hundreds of frames there
+	# makes the editor's filesystem scanner continuously rebuild its index and
+	# can starve the renderer. The final MP4 and JSON remain under res:// for
+	# convenient project-relative references, while only this transient frame
+	# directory lives in the OS cache. A microsecond suffix prevents two takes
+	# started within the same wall-clock second from sharing frame names.
+	var temp_capture_id := "%s-%d" % [timestamp, Time.get_ticks_usec()]
+	var frames_directory := OS.get_cache_dir().path_join(
+		"ots_render_capture"
+	).path_join(temp_capture_id)
 	var directory_error := DirAccess.make_dir_recursive_absolute(frames_directory)
 	if directory_error != OK:
 		_finish_video_with_error("Could not create %s (error %d)." % [frames_directory, directory_error])
 		return
+	print("OTS_VIDEO temporary frames: %s" % frames_directory)
 
 	var capture_viewport := SubViewport.new()
 	capture_viewport.name = "OTSVideoOffscreenCapture"
@@ -1552,7 +1615,7 @@ func _advance_fixed_step_capture(delta_seconds: float) -> void:
 		var editor_viewport := EditorInterface.get_editor_viewport_3d(_camera_follow_viewport_index)
 		var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
 		if editor_camera != null:
-			editor_camera.global_transform = _camera_follow_character.global_transform \
+			editor_camera.global_transform = _camera_follow_target_transform(_camera_follow_character, delta_seconds) \
 				* _camera_follow_relative_transform
 
 

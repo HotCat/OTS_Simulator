@@ -12,8 +12,9 @@
 
 
 (godot-camera-confirm-follow
-   :target-node "MaleCarrier"
-   :viewport 1)
+   :target-node "CarrierTrajectory"
+   :viewport 1
+   :smoothing-seconds 0.12)
 
 
 
@@ -21,24 +22,39 @@
 (defun ots-walk-camera-shot ()
   (interactive)
 
+  (godot-walk-restart-carrier-at-trajectory-start)
   (godot-walk-restart-carrier-trajectory)
 
-  (godot-camera-confirm-follow
-   :target-node "MaleCarrier"
-   :viewport 1)
+  ;; (godot-camera-confirm-follow
+  ;;  :target-node "CarrierTrajectory"
+  ;;  :viewport 1
+  ;;  :smoothing-seconds 0.12)
+
+
+  (godot-camera-confirm-carrier-trajectory-follow
+   :viewport 1
+   :smoothing-seconds 0.12)
+
+
+  ;; (godot-camera-program-begin
+  ;;  :name "ots-carry-girl-coffeebar-01"
+  ;;  :target-node "CarrierTrajectory"
+  ;;  :viewport 1
+  ;;  :loop nil)
 
   (godot-camera-program-begin
-   :name "ots-carry-girl-coffeebar-01"
-   :target-node "MaleCarrier"
+   :name "ots-carry-shot"
+   :target-node "CarrierTrajectory"
    :viewport 1
    :loop nil)
 
+
   (godot-camera-g4 :seconds 0.1)
 
-  (godot-camera-g3-orbit
-   :degrees 20.88
+  (godot-camera-g2-orbit
+   :degrees 140.88
    :pivot '(0.0 1.2 0.0)
-   :duration 7.0
+   :duration 6.0
    :easing 'smooth)
 
   (godot-camera-g4 :seconds 0.75)
@@ -66,3 +82,18 @@
 
 (godot-camera-release-follow)
 
+(defun restart-ots-carrier ()
+  (interactive)
+  (godot-walk-restart-carrier-at-trajectory-start))
+
+
+
+
+  (godot-ots-carry-play-walk-cycle)
+
+  (godot-walk-record-camera-motion
+   :duration 9.0
+   :fps 24
+   :start-delay 0.1
+   :auto-resolution t
+   :viewport 1)

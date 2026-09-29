@@ -584,7 +584,8 @@ def fit_hierarchical_pose(target: Rig, sam_globals: dict[str, np.ndarray],
                           nlf_names: list[str], positions: np.ndarray,
                           uncertainties: np.ndarray,
                           nlf_weight: float,
-                          confidence_floor: float = 0.0) -> tuple[dict[str, np.ndarray], set[str]]:
+                          confidence_floor: float = 0.0,
+                          sam_axial_weight: float = 1.0) -> tuple[dict[str, np.ndarray], set[str]]:
     """Fit target-local rotations parent-first with minimal swing corrections.
 
     Limbs inherit the already fitted parent orientation before aiming at their
@@ -611,10 +612,18 @@ def fit_hierarchical_pose(target: Rig, sam_globals: dict[str, np.ndarray],
             parent = int(target.parents[index])
             inherited = (target.rest_global[index] if parent < 0 else
                          quat_multiply(final_globals[parent], target.rest_local[index]))
-            # SAM is deliberately present only for the axial chain. For limbs,
-            # start from the target's inherited rest basis to preserve bone roll.
-            fitted_global = (sam_globals[bone_name][frame].copy()
-                             if bone_name in sam_globals else inherited)
+            # SAM is deliberately present only for the axial chain. In a
+            # carry shot, however, the carried body can contaminate SAM's
+            # axial twist estimate. Blend that anchor toward the inherited
+            # parent/rest orientation so the caller can trust NLF's smoother
+            # segment directions without importing abrupt torso spins.
+            fitted_global = inherited.copy()
+            if bone_name in sam_globals:
+                anchor_weight = sam_axial_weight if bone_name in SAM_AXIAL_BONES else 1.0
+                fitted_global = quat_slerp(
+                    inherited, sam_globals[bone_name][frame],
+                    min(1.0, max(0.0, float(anchor_weight))),
+                )
             segment = NLF_SEGMENTS.get(bone_name)
             rest_offset = child_offset_for_bone(target, bone_name)
             if segment is not None and rest_offset is not None:
@@ -1379,6 +1388,12 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
                  fps: float, nlf_weight: float, root_motion_mode: str = "foot-contact",
                  foot_lock_strength: float = 0.85, root_motion_scale: float | None = None,
                  nlf_confidence_floor: float = 0.0,
+                 sam_axial_weight: float = 1.0,
+                 hips_responsiveness: float = 0.70,
+                 torso_responsiveness: float = 0.58,
+                 max_torso_tilt_degrees: float | None = None,
+                 torso_upright_strength: float = 1.0,
+                 max_head_up_degrees: float | None = None,
                  trajectory: Mapping[str, Any] | None = None,
                  trajectory_samples: int = 80, trajectory_heading: str = "tangent") -> tuple[
                      list[dict[str, list[float]]], dict[str, Any], dict[str, Any]]:
@@ -1388,7 +1403,7 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
     )
     local, driven_bones = fit_hierarchical_pose(
         target, base_globals, nlf_names, positions, uncertainties, nlf_weight,
-        nlf_confidence_floor,
+        nlf_confidence_floor, sam_axial_weight,
     )
     contacts = infer_foot_contacts(nlf_names, positions, fps)
     root_motion, root_diagnostics = infer_root_motion(
@@ -1401,9 +1416,9 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
     for name, quaternions in local.items():
         responsiveness = 0.44
         if name == "Hips":
-            responsiveness = 0.70  # retain dance hip wobble and pace
+            responsiveness = hips_responsiveness
         elif name in {"Spine", "Chest", "UpperChest", "Neck"}:
-            responsiveness = 0.58
+            responsiveness = torso_responsiveness
         elif "Foot" in name or "Toes" in name:
             responsiveness = 0.36
         filtered[name] = temporal_quaternion_filter(quaternions, responsiveness)
@@ -1418,6 +1433,10 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
                     filtered[bone_name][frame - 1], filtered[bone_name][frame], 0.28,
                 )
     torso_diagnostics: dict[str, float] | None = None
+    if max_torso_tilt_degrees is not None:
+        torso_diagnostics = stabilize_torso_upright(
+            target, filtered, max_torso_tilt_degrees, torso_upright_strength,
+        )
     if trajectory is not None and "max_torso_tilt_degrees" in trajectory:
         torso_diagnostics = stabilize_torso_upright(
             target, filtered,
@@ -1425,6 +1444,10 @@ def solve_motion(target: Rig, source: Rig, nlf_observations: Mapping[str, Any],
             float(trajectory.get("torso_upright_strength", 1.0)),
         )
     head_diagnostics: dict[str, float] | None = None
+    if max_head_up_degrees is not None:
+        head_diagnostics = limit_head_upward_pitch(
+            target, filtered, max_head_up_degrees,
+        )
     if trajectory is not None and "max_head_up_degrees" in trajectory:
         head_diagnostics = limit_head_upward_pitch(
             target, filtered,
@@ -1681,6 +1704,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--nlf-device", default="mps")
     parser.add_argument("--nlf-batch-size", type=int, default=8)
     parser.add_argument("--nlf-weight", type=float, default=1.0)
+    parser.add_argument("--sam-axial-weight", type=float, default=1.0,
+                        help="trust in SAM3D axial torso twist; lower for occluded carries")
+    parser.add_argument("--hips-responsiveness", type=float, default=0.70,
+                        help="bidirectional quaternion filter responsiveness for Hips")
+    parser.add_argument("--torso-responsiveness", type=float, default=0.58,
+                        help="bidirectional quaternion filter responsiveness for spine/chest/neck")
+    parser.add_argument("--max-torso-tilt-degrees", type=float,
+                        help="optional upright limit for Hips-to-UpperChest tilt")
+    parser.add_argument("--torso-upright-strength", type=float, default=1.0)
+    parser.add_argument("--max-head-up-degrees", type=float,
+                        help="optional upward head pitch limit")
     parser.add_argument("--nlf-confidence-floor", type=float, default=0.0,
                         help="minimum NLF segment confidence; useful for seated/collapsed poses where ankles are occluded")
     parser.add_argument("--root-motion", choices=("off", "pelvis", "foot-contact"),
@@ -1744,6 +1778,15 @@ def validate_paths(args: argparse.Namespace) -> None:
         raise RuntimeError("--root-motion-scale must be positive")
     if not 0.0 <= args.nlf_confidence_floor <= 1.0:
         raise RuntimeError("--nlf-confidence-floor must be between 0 and 1")
+    for name in ("sam_axial_weight", "hips_responsiveness", "torso_responsiveness",
+                 "torso_upright_strength"):
+        value = float(getattr(args, name))
+        if not 0.0 <= value <= 1.0:
+            raise RuntimeError(f"--{name.replace('_', '-')} must be between 0 and 1")
+    for name in ("max_torso_tilt_degrees", "max_head_up_degrees"):
+        value = getattr(args, name)
+        if value is not None and value < 0.0:
+            raise RuntimeError(f"--{name.replace('_', '-')} must be non-negative")
     if args.trajectory is not None and not args.trajectory.is_file():
         raise RuntimeError(f"trajectory file does not exist: {args.trajectory}")
 
@@ -1817,6 +1860,9 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
         target, source, observations["nlf"], observations["sam3d"], frame_count,
         args.fps, args.nlf_weight, args.root_motion, args.foot_lock_strength,
         args.root_motion_scale, args.nlf_confidence_floor,
+        args.sam_axial_weight, args.hips_responsiveness, args.torso_responsiveness,
+        args.max_torso_tilt_degrees, args.torso_upright_strength,
+        args.max_head_up_degrees,
         json.loads(args.trajectory.read_text(encoding="utf-8")) if args.trajectory else None,
         args.trajectory_samples, args.trajectory_heading,
     )
@@ -1840,6 +1886,12 @@ def fit_motion(args: argparse.Namespace) -> dict[str, Any]:
                          "foot contact damping"],
             "nlf_weight": args.nlf_weight,
             "nlf_confidence_floor": args.nlf_confidence_floor,
+            "sam_axial_weight": args.sam_axial_weight,
+            "hips_responsiveness": args.hips_responsiveness,
+            "torso_responsiveness": args.torso_responsiveness,
+            "max_torso_tilt_degrees": args.max_torso_tilt_degrees,
+            "torso_upright_strength": args.torso_upright_strength,
+            "max_head_up_degrees": args.max_head_up_degrees,
         },
         "diagnostics": diagnostics,
         "root_motion": root_motion,

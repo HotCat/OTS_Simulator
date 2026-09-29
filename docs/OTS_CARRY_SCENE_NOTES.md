@@ -70,6 +70,78 @@ Rebuild and verify it with:
   --script res://tools/verify_ots_walk_cycle.gd
 ```
 
+### H3 heavy-load gait capture
+
+The H3 over-the-shoulder reference was solved with the NLF + SAM3D Body
+workflow to the 53-bone `MaleCarrier` rig. The retained phase-aligned source
+range is frames `81..117` at 24 FPS (1.5 seconds). It is intentionally stored
+as a separate library so the authored `ots_carry_walk_cycle` remains unchanged.
+
+For the usable heavy-load walk, prefer the conservative hybrid clip:
+
+```text
+h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid
+```
+
+It keeps the authored OTS lower-body gait (hips, thighs, shins, and feet),
+which has the correct step clearance and continuous forward rhythm, and uses
+only the corrected H3 upper-body response (torso, arms, neck, and head). The
+upper-body rotations are phase-resampled to the authored 4.468-second loop and
+blended toward the authored pose (`torso=0.58`, `head=0.38`, `arms=0.52`). This
+avoids the side-view capture's abrupt axial spin and falling torso while still
+showing a restrained loaded posture. The raw and full corrected libraries have
+been removed from the scene because the hybrid is the approved production clip.
+
+This pass reduces SAM axial-twist influence, applies stronger bidirectional
+torso filtering and an upright-load constraint, then raises only airborne feet
+with a cyclic target-rig two-bone IK arc. Planted foot orientation and the
+authored carry pose are preserved.
+
+It contains rotation tracks for the male carrier only. The first captured pose
+is rebased onto the authored OTS carry pose, the endpoint repeats frame 0, and
+world translation/heading remain owned by `OTSCarryClayProxy`'s trajectory.
+The source and loop caches are kept under:
+
+```text
+res://renders/mocap/ots_h3_heavy_load_20260928/
+```
+
+The capture inference itself writes intermediate video frames nowhere in the
+project; it uses a temporary directory outside the Godot workspace.
+
+Validate the library and its scene binding with:
+
+```bash
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . \
+  --script res://tools/validate_male_gait_cycle.gd
+```
+
+In the Animation panel, select `OTSCarryAnimationPlayer`, choose the
+`h3_heavy_load_hybrid` library, and play `ots_h3_heavy_load_walk_hybrid`.
+The existing autoplay remains `ots_carry_walk_cycle`; switching libraries is
+therefore an explicit choice.
+
+## Stable camera follow for the predefined carrier route
+
+Do not bind an OTS camera to `MaleCarrier` when the shot includes the gait
+animation. That target can inherit animated skeleton/foot-lock motion and make
+the editor camera vibrate. Use the semantic `CarrierTrajectory` target instead:
+
+```elisp
+(godot-camera-confirm-carrier-trajectory-follow
+ :viewport 1
+ :smoothing-seconds 0.12)
+```
+
+`CarrierTrajectory` is still the authored, predefined route. The OTS Render
+plugin resolves its camera anchor through
+`OTSCarryClayProxy/get_camera_follow_transform`, which returns the evaluated
+carrier root position and route heading while ignoring torso, foot, and carried
+body bone animation. The smoothing value filters only route translation and
+heading; it does not alter the trajectory or character animation. Existing
+camera programs should set `:target-node "CarrierTrajectory"` in
+`godot-camera-program-begin` as well.
+
 ## Carrier trajectory and walk plane
 
 The scene has two authoring nodes:
