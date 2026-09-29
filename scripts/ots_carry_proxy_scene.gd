@@ -32,7 +32,17 @@ const MAX_REASONABLE_PELVIS_OFFSET_METERS := 1.50
 ## 0 keeps the original straight polyline; 1 gives the largest practical
 ## Catmull-Rom corner radius while remaining inside the neighboring spans.
 @export_range(0.0, 1.0, 0.01) var trajectory_corner_smoothing := 0.7
-@export_range(2, 32, 1) var trajectory_samples_per_segment := 10
+## A denser route polyline keeps position interpolation accurate. Heading is
+## filtered separately below, so this is not the only corner-stability control.
+@export_range(2, 64, 1) var trajectory_samples_per_segment := 32
+## Distance along the route used to estimate a central-difference heading.
+## Looking across several samples avoids the instantaneous tangent change at a
+## waypoint. A ratio makes the setting scale with short and long routes alike.
+@export_range(0.0, 0.25, 0.005, "suffix:route") var trajectory_heading_lookahead_ratio := 0.08
+## Exponential time constant for route heading. This is deliberately separate
+## from trajectory_corner_smoothing: it filters orientation without changing
+## the authored path or the carrier's translation.
+@export_range(0.0, 1.0, 0.01, "suffix:s") var trajectory_heading_smoothing_seconds := 0.12
 # This MakeHuman carrier faces local +Z. Using Godot's conventional -Z here
 # turns the mesh 180 degrees and makes a correct forward gait travel backward.
 @export var carrier_local_forward := Vector3(0.0, 0.0, 1.0)
@@ -142,6 +152,8 @@ var _male_foot_contact_baseline := Vector2.ZERO
 var _male_foot_contact_baseline_initialized := [false, false]
 var _carrier_initial_transform := Transform3D.IDENTITY
 var _carrier_baseline_initialized := false
+var _carrier_heading_rotation := Quaternion.IDENTITY
+var _carrier_heading_initialized := false
 var _trajectory_progress := 0.0
 var _trajectory_was_active := false
 var _trajectory_points: Array[Vector3] = []
@@ -259,6 +271,7 @@ func editor_capture_end_fixed_step(was_playing: bool = false) -> Dictionary:
 func restart_carrier_trajectory() -> void:
 	_trajectory_progress = 0.0
 	_reset_carrier_foot_lock()
+	_reset_carrier_heading_filter()
 	_reset_secondary_rhythm()
 	_reset_pelvis_follow_filter()
 	_rebuild_carrier_trajectory()
@@ -339,6 +352,7 @@ func _apply_carrier_trajectory(delta: float) -> void:
 			carrier.global_transform = _carrier_initial_transform
 			_trajectory_progress = 0.0
 			_reset_carrier_foot_lock()
+		_reset_carrier_heading_filter()
 		_trajectory_was_active = false
 		return
 	if carrier == null:
@@ -356,10 +370,11 @@ func _apply_carrier_trajectory(delta: float) -> void:
 	if not _trajectory_was_active:
 		_trajectory_progress = 0.0
 		_reset_carrier_foot_lock()
+		_reset_carrier_heading_filter()
 		_trajectory_was_active = true
 	_trajectory_progress += carrier_walk_speed_mps * maxf(delta, 0.0)
 	_trajectory_progress = fposmod(_trajectory_progress, length) if carrier_trajectory_loop else clampf(_trajectory_progress, 0.0, length)
-	_place_carrier_on_trajectory(carrier, _trajectory_progress)
+	_place_carrier_on_trajectory(carrier, _trajectory_progress, delta)
 	_apply_carrier_foot_lock(carrier, delta, length)
 
 func _rebuild_carrier_trajectory() -> void:
@@ -421,7 +436,12 @@ func _carrier_trajectory_signature() -> String:
 	if trajectory == null:
 		return ""
 	var values: Array[String] = []
-	values.append("smooth=%.3f samples=%d" % [trajectory_corner_smoothing, trajectory_samples_per_segment])
+	values.append("smooth=%.3f samples=%d heading_lookahead=%.3f heading_tau=%.3f" % [
+		trajectory_corner_smoothing,
+		trajectory_samples_per_segment,
+		trajectory_heading_lookahead_ratio,
+		trajectory_heading_smoothing_seconds,
+	])
 	var plane_node := get_node_or_null(carrier_walk_plane_path) as Node3D
 	if plane_node != null:
 		values.append("plane=%s" % plane_node.global_transform)
@@ -430,7 +450,7 @@ func _carrier_trajectory_signature() -> String:
 			values.append("%s=%s" % [child.name, (child as Marker3D).global_position])
 	return "|".join(values)
 
-func _place_carrier_on_trajectory(carrier: Node3D, progress: float) -> void:
+func _place_carrier_on_trajectory(carrier: Node3D, progress: float, delta: float = 0.0, update_heading: bool = true) -> void:
 	var sample := _sample_carrier_trajectory(progress)
 	if sample.is_empty():
 		return
@@ -441,7 +461,15 @@ func _place_carrier_on_trajectory(carrier: Node3D, progress: float) -> void:
 	var tangent := (sample.tangent as Vector3).slide(normal).normalized()
 	var initial_forward := (_carrier_initial_transform.basis * carrier_local_forward.normalized()).slide(normal).normalized()
 	if tangent.length_squared() > 0.0001 and initial_forward.length_squared() > 0.0001:
-		carrier.global_basis = Basis(Quaternion(initial_forward, tangent)) * _carrier_initial_transform.basis
+		var target_rotation := Quaternion(initial_forward, tangent).normalized()
+		if not _carrier_heading_initialized or delta <= 0.0:
+			_carrier_heading_rotation = target_rotation
+			_carrier_heading_initialized = true
+		elif update_heading:
+			var smoothing_seconds := maxf(trajectory_heading_smoothing_seconds, 0.0)
+			var alpha := 1.0 if smoothing_seconds <= 0.0001 else 1.0 - exp(-delta / smoothing_seconds)
+			_carrier_heading_rotation = _carrier_heading_rotation.slerp(target_rotation, clampf(alpha, 0.0, 1.0)).normalized()
+		carrier.global_basis = Basis(_carrier_heading_rotation) * _carrier_initial_transform.basis
 
 func _sample_carrier_trajectory(progress: float) -> Dictionary:
 	if _trajectory_points.size() < 2:
@@ -454,8 +482,61 @@ func _sample_carrier_trajectory(progress: float) -> Dictionary:
 			var to := _trajectory_points[index]
 			var segment_length := maxf(from.distance_to(to), 0.000001)
 			var alpha := clampf((distance - _trajectory_cumulative[index - 1]) / segment_length, 0.0, 1.0)
-			return {"position": from.lerp(to, alpha), "tangent": (to - from).normalized()}
-	return {"position": _trajectory_points[-1], "tangent": (_trajectory_points[-1] - _trajectory_points[-2]).normalized()}
+			var position := from.lerp(to, alpha)
+			return {"position": position, "tangent": _sample_route_tangent(distance)}
+	return {"position": _trajectory_points[-1], "tangent": _sample_route_tangent(length)}
+
+func _sample_route_tangent(distance: float) -> Vector3:
+	"""Estimate a continuous route heading around the current distance.
+
+	The rendered camera follows the carrier root. Using one sampled segment's
+	tangent made that root yaw by a visible step at every polyline vertex. A
+	central difference over a configurable route distance gives a stable tangent
+	while retaining the exact sampled position. At the ends of an open route the
+	window becomes a forward/backward difference so the carrier never looks
+	outside the authored path.
+	"""
+	if _trajectory_points.size() < 2 or _trajectory_cumulative.is_empty():
+		return Vector3.ZERO
+	var length := float(_trajectory_cumulative[-1])
+	var window := clampf(length * trajectory_heading_lookahead_ratio, 0.0, length * 0.25)
+	if window <= 0.0001:
+		var fallback := _nearest_route_segment_tangent(distance)
+		return fallback
+	var lower := maxf(0.0, distance - window)
+	var upper := minf(length, distance + window)
+	if upper - lower <= 0.0001:
+		return _nearest_route_segment_tangent(distance)
+	var lower_position := _sample_route_position(lower)
+	var upper_position := _sample_route_position(upper)
+	var chord := upper_position - lower_position
+	return chord.normalized() if chord.length_squared() > 0.00000001 else _nearest_route_segment_tangent(distance)
+
+func _sample_route_position(distance: float) -> Vector3:
+	if _trajectory_points.size() < 2 or _trajectory_cumulative.is_empty():
+		return Vector3.ZERO
+	var length := float(_trajectory_cumulative[-1])
+	var clamped_distance := clampf(distance, 0.0, length)
+	for index in range(1, _trajectory_points.size()):
+		if clamped_distance <= _trajectory_cumulative[index] or index == _trajectory_points.size() - 1:
+			var from := _trajectory_points[index - 1]
+			var to := _trajectory_points[index]
+			var segment_length := maxf(from.distance_to(to), 0.000001)
+			var alpha := clampf((clamped_distance - _trajectory_cumulative[index - 1]) / segment_length, 0.0, 1.0)
+			return from.lerp(to, alpha)
+	return _trajectory_points[-1]
+
+func _nearest_route_segment_tangent(distance: float) -> Vector3:
+	var length := float(_trajectory_cumulative[-1])
+	var clamped_distance := clampf(distance, 0.0, length)
+	for index in range(1, _trajectory_points.size()):
+		if clamped_distance <= _trajectory_cumulative[index] or index == _trajectory_points.size() - 1:
+			return (_trajectory_points[index] - _trajectory_points[index - 1]).normalized()
+	return (_trajectory_points[-1] - _trajectory_points[-2]).normalized()
+
+func _reset_carrier_heading_filter() -> void:
+	_carrier_heading_rotation = Quaternion.IDENTITY
+	_carrier_heading_initialized = false
 
 func _project_to_walk_plane(point: Vector3, height: float) -> Vector3:
 	var plane_node := get_node_or_null(carrier_walk_plane_path) as Node3D
@@ -496,7 +577,7 @@ func _apply_carrier_foot_lock(carrier: Node3D, delta: float, trajectory_length: 
 	if correction_count > 0 and tangent.length_squared() > 0.0001:
 		_trajectory_progress += correction_sum / float(correction_count) * carrier_foot_lock_strength
 		_trajectory_progress = fposmod(_trajectory_progress, trajectory_length) if carrier_trajectory_loop else clampf(_trajectory_progress, 0.0, trajectory_length)
-		_place_carrier_on_trajectory(carrier, _trajectory_progress)
+		_place_carrier_on_trajectory(carrier, _trajectory_progress, 0.0, false)
 	for side in ["left", "right"]:
 		_carrier_previous_feet[side] = _carrier_foot_world(side)
 		_carrier_foot_was_contact[side] = bool(contacts[side])
