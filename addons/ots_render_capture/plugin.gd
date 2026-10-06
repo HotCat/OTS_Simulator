@@ -58,7 +58,13 @@ var _auto_video_resolution := false
 var _recording_walk_controller: Node
 var _recording_walk_was_playing := false
 var _recording_fixed_step_active := false
+var _recording_capture_options: Dictionary = {}
 var _recording_camera_program_was_playing := false
+## Optional recording-time cutoff for moving-camera follow.  A non-negative
+## value is measured from the first captured frame; once reached, the current
+## editor camera transform is preserved while the rest of the take continues.
+var _recording_camera_follow_stop_at := -1.0
+var _recording_elapsed_seconds := 0.0
 var _camera_follow_active := false
 var _camera_follow_character: Node3D
 var _camera_follow_target_path := FEMALE_PATH
@@ -1222,6 +1228,11 @@ func _on_record_video_pressed(options: Dictionary = {}) -> void:
 		return
 	_video_capture_scheduled = true
 	_video_cancel_requested = false
+	# Keep transport-only options as part of the pending take. Duration/FPS/etc.
+	# are mirrored into dock controls below, but semantic options such as
+	# `motion_source=stationary` belong to the scene's fixed-step owner and must
+	# survive until the deferred recorder starts.
+	_recording_capture_options = options.duplicate(true)
 	_apply_video_options(options)
 	# Enter the fixed-step clock immediately, before the deferred scene-copy
 	# setup. Emacs commonly sends walk.restart and camera.program.load directly
@@ -1229,7 +1240,7 @@ func _on_record_video_pressed(options: Dictionary = {}) -> void:
 	# from racing those commands.
 	var pending_scene_root := EditorInterface.get_edited_scene_root()
 	if pending_scene_root != null:
-		_begin_fixed_step_capture(pending_scene_root)
+		_begin_fixed_step_capture(pending_scene_root, _recording_capture_options)
 	_status_label.text = "Camera-motion recording requested; preparing fixed-step scene capture…"
 	editor_camera_video_state_changed.emit(
 		true, "Recording requested; preparing fixed-step off-screen capture…"
@@ -1305,7 +1316,7 @@ func _record_editor_camera_video() -> void:
 	var female_path := _resolve_character_path(scene_root, FEMALE_PATH, "IK_character", "female_character_path")
 	var male_path := _resolve_character_path(scene_root, MALE_PATH, "MaleCarrier", "male_character_path")
 	if not _recording_fixed_step_active:
-		_begin_fixed_step_capture(scene_root)
+		_begin_fixed_step_capture(scene_root, _recording_capture_options)
 
 	var editor_viewport := EditorInterface.get_editor_viewport_3d(_viewport_choice.get_selected_id())
 	if editor_viewport == null:
@@ -1481,6 +1492,13 @@ func _record_editor_camera_video() -> void:
 		# This fixed-step clock is independent of GPU/JPEG latency, so expensive
 		# avatar skinning cannot make the resulting MP4 play fast-forwarded.
 		_advance_fixed_step_capture(1.0 / float(fps))
+		# Skeleton3D.advance() queues modifier evaluation through Godot's deferred
+		# skeleton notification. Yield once before the next _sync_live_capture_state
+		# call so TwoBoneIK3D/CopyTransformModifier3D output is committed to the
+		# source scene and copied into the off-screen capture scene on the next
+		# frame. Without this, editor preview shows hand IK while recorded frames
+		# repeatedly copy the previous pre-IK pose.
+		await get_tree().process_frame
 
 	capture_viewport.queue_free()
 	if captured_frames == 0:
@@ -1563,8 +1581,15 @@ func _record_editor_camera_video() -> void:
 	print("OTS_VIDEO completed: %s" % video_path)
 
 
-func _begin_fixed_step_capture(scene_root: Node) -> void:
+func _begin_fixed_step_capture(scene_root: Node, capture_options: Dictionary = {}) -> void:
 	_recording_fixed_step_active = true
+	_recording_elapsed_seconds = 0.0
+	_recording_camera_follow_stop_at = -1.0
+	var stop_follow_value = capture_options.get("camera_follow_stop_at", null)
+	if stop_follow_value != null:
+		var parsed_stop_follow_at := float(stop_follow_value)
+		if is_finite(parsed_stop_follow_at) and parsed_stop_follow_at >= 0.0:
+			_recording_camera_follow_stop_at = parsed_stop_follow_at
 	# Prefer the scene's own fixed-step owner.  OTS carry scenes can retain a
 	# disabled legacy FemaleWalkController for compatibility, but selecting it
 	# first would bypass OTSCarryClayProxy's AnimationPlayer and make the carry
@@ -1573,7 +1598,13 @@ func _begin_fixed_step_capture(scene_root: Node) -> void:
 	_recording_walk_was_playing = false
 	if is_instance_valid(_recording_walk_controller) and \
 			_recording_walk_controller.has_method("editor_capture_begin_fixed_step"):
-		var walk_state := _recording_walk_controller.call("editor_capture_begin_fixed_step") as Dictionary
+		# The OTS carry trajectory is a separate motion owner from the legacy walk
+		# controller. Passing the complete take options lets it honor `stationary`
+		# instead of advancing an autoplay AnimationPlayer and a motionless carrier
+		# along CarrierTrajectory.
+		var walk_state := _recording_walk_controller.call(
+			"editor_capture_begin_fixed_step", capture_options
+		) as Dictionary
 		_recording_walk_was_playing = bool(walk_state.get("was_playing", false))
 	# A programmed camera has the same wall-clock problem as the walk evaluator.
 	# Freeze its normal _process clock and advance it beside the fixed gait step.
@@ -1596,6 +1627,7 @@ func _find_fixed_step_controller(node: Node) -> Node:
 func _advance_fixed_step_capture(delta_seconds: float) -> void:
 	if not _recording_fixed_step_active:
 		return
+	var next_recording_time := _recording_elapsed_seconds + maxf(0.0, delta_seconds)
 	if is_instance_valid(_recording_walk_controller) and \
 			_recording_walk_controller.has_method("editor_capture_step_fixed"):
 		_recording_walk_controller.call("editor_capture_step_fixed", delta_seconds)
@@ -1617,6 +1649,18 @@ func _advance_fixed_step_capture(delta_seconds: float) -> void:
 		if editor_camera != null:
 			editor_camera.global_transform = _camera_follow_target_transform(_camera_follow_character, delta_seconds) \
 				* _camera_follow_relative_transform
+			# Apply the transform for the cutoff frame first, then release follow.
+			# stop_editor_camera_follow() intentionally leaves the editor camera at
+			# its current transform, so subsequent recorded frames are locked off
+			# while the character/trajectory continues to advance.
+			if _recording_camera_follow_stop_at >= 0.0 and \
+				next_recording_time >= _recording_camera_follow_stop_at:
+				print("OTS_CAMERA_FOLLOW stopping at recording time %.3f s" % next_recording_time)
+				stop_editor_camera_follow()
+				# Do not resume a camera program that was active before the take;
+				# the requested cutoff deliberately makes the shot locked-off.
+				_recording_camera_program_was_playing = false
+	_recording_elapsed_seconds = next_recording_time
 
 
 func _end_fixed_step_capture() -> void:
@@ -1627,10 +1671,15 @@ func _end_fixed_step_capture() -> void:
 	# during the fixed-step take, leave it at its final authored frame.
 	if _recording_camera_program_was_playing and _camera_program_loaded:
 		_camera_program_playing = true
+	# Always leave fixed-step mode, including takes that had no running camera
+	# program or whose follow was deliberately released at a cutoff.
 	_recording_walk_controller = null
 	_recording_walk_was_playing = false
 	_recording_fixed_step_active = false
+	_recording_capture_options.clear()
 	_recording_camera_program_was_playing = false
+	_recording_camera_follow_stop_at = -1.0
+	_recording_elapsed_seconds = 0.0
 
 
 func _copy_camera(
@@ -1696,9 +1745,13 @@ func _duplicate_scene_snapshot(source: Node) -> Node:
 
 
 func _prepare_live_capture_copy(node: Node) -> void:
-	# The editor scene remains the sole evaluator. Native modifiers and animation
-	# players in the off-screen duplicate must not overwrite the pose copied from
-	# the source between synchronization and RenderingServer submission.
+	# Animation players in the off-screen duplicate must not advance independently
+	# of the fixed-step source clock. Skeleton modifiers are intentionally kept
+	# active: Godot 4.7 applies modifier output transiently during the skeleton
+	# update and restores the unmodified bone poses afterward, so that evaluated
+	# IK cannot be recovered later through get_bone_global_pose(). The capture
+	# skeleton therefore receives the current base pose and target-node transforms
+	# and evaluates its own identical modifier stack immediately before rendering.
 	var editor_only_trajectory_preview := node.has_meta("editor_only_trajectory_preview")
 	if node.name == "CurvePreview" and node.get_parent() != null and \
 			node.get_parent().name == "FemaleWalkTrajectory":
@@ -1707,9 +1760,7 @@ func _prepare_live_capture_copy(node: Node) -> void:
 		if node is Node3D:
 			(node as Node3D).visible = false
 		return
-	if node is SkeletonModifier3D:
-		(node as SkeletonModifier3D).active = false
-	elif node is AnimationPlayer:
+	if node is AnimationPlayer:
 		(node as AnimationPlayer).stop()
 	elif node is AnimationTree:
 		(node as AnimationTree).active = false
@@ -1802,9 +1853,10 @@ func _sync_live_capture_state(bindings: Dictionary) -> void:
 		if is_instance_valid(source) and is_instance_valid(capture):
 			capture.transform = source.transform
 
-	# get_bone_global_pose() is the evaluated skeleton-space result. Copying it
-	# parent-first also records active SkeletonModifier3D/IK output; copying only
-	# get_bone_pose_rotation() would miss modifier-generated deformation.
+	# Copy the current unmodified skeleton-space pose parent-first. Godot 4.7
+	# restores this base pose after every modifier update, so the off-screen
+	# duplicate keeps its native SkeletonModifier3D stack active and re-solves IK
+	# from these poses plus the synchronized contact-marker transforms.
 	for binding_value in bindings.get("skeletons", []):
 		var binding := binding_value as Dictionary
 		var source := binding.get("source") as Skeleton3D

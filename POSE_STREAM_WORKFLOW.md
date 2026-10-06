@@ -827,6 +827,26 @@ parameters directly instead of depending on the dock's last values:
 Calling it again while a take is active stops that take; supplied options are
 used only when starting a new recording.
 
+To let the camera track the predefined route for only part of a take, pass
+`:camera-follow-stop-at`.  The value is measured from the first captured frame;
+at that time Godot applies the cutoff frame's transform, releases trajectory
+follow, and holds the camera there while character motion and recording
+continue:
+
+```elisp
+(godot-walk-record-camera-motion
+ :duration 9.0
+ :fps 24
+ :camera-follow-stop-at 6.0
+ :auto-resolution t
+ :viewport 1)
+```
+
+This is a locked-off transition, not a pause of the carrier.  The carrier,
+female secondary motion, and any bus or prop animation continue after six
+seconds.  Omit the option (or set it beyond the take duration) to keep camera
+follow active for the whole recording.
+
 To end the MP4 on the camera program's final authored frame, load the program
 first with `:play nil`, then use either of these equivalent forms:
 
@@ -936,3 +956,107 @@ you want one uninterrupted heading. A corner is an intentional instantaneous
 heading change, so add a Bézier path later if the character must turn smoothly.
 The existing `female_walk_bezier.json` filename is retained for command and
 Emacs compatibility even though its `type` now selects linear interpolation.
+
+## Project-local OTS motion matching
+
+The OTS carry scene includes `OTSMotionMatching`, a safe GDScript selector in
+`res://scripts/ots_motion_matching_controller.gd`. It is intentionally not the
+upstream native `godot-motion-matching` extension: that binary targets an older
+Godot/godot-cpp ABI and must remain quarantined on Godot 4.7.
+
+The selector scores the existing `AnimationPlayer` clips using the route-owned
+query from `CarrierTrajectory`:
+
+- requested carrier speed;
+- normalized turn amount ahead of the carrier;
+- desired load level; and
+- current normalized gait phase.
+
+It preserves phase when changing clips, applies hysteresis so a waypoint does
+not make the animation oscillate, and crossfades the selected source. The
+trajectory still owns world movement and heading, while pelvis follow, female
+secondary motion, and hand-contact IK continue to run in the existing OTS
+controller. `ots_carry_walk_cycle` is never modified or removed.
+
+The feature is opt-in so existing authored shots remain reproducible. In the
+Godot Inspector, select `OTSMotionMatching` and use **Enable motion matching**,
+or call it from Emacs:
+
+```elisp
+;; Reset the route and select a gait automatically.
+(godot-ots-carry-play-motion-matching)
+
+;; Keep the current route position while enabling it.
+(godot-ots-carry-play-motion-matching nil)
+
+;; Disable selection without changing the currently evaluated pose.
+(godot-ots-carry-set-motion-matching nil)
+
+;; Request the selected clip, score, and route query.
+(godot-ots-carry-motion-matching-status)
+```
+
+The default candidate set is the authored OTS cycle, the raw H3 heavy-load
+clip, the smoothed H3 hybrid, and the Mixamo lower-body comparison. Candidate
+load/speed/turn-cost profiles, quality penalties, blend time, hysteresis, and
+weights are exposed on `OTSMotionMatching` for shot-specific tuning. During
+editor video capture the selector is advanced through the same fixed-step hook
+as the OTS controller, so a recorded frame cannot drift with wall-clock time.
+
+## Mixamo-to-Godot root-motion preprocessing
+
+`Holding Walk.fbx` is kept outside the repository and is never overwritten.
+The reproducible Blender replacement for the tutorial's abandoned Mixamo Root
+add-on is `res://tools/mixamo_to_godot_root_motion.py`. It removes duplicate
+armatures, normalizes the FBX armature scale (including animated bone-location
+curves), and adds a small `Root` parent above `mixamorig:Hips` without changing
+the mesh proportions. The generated derivative is:
+
+```text
+res://assets/animations/mixamo_holding_walk_root_fixed.fbx
+```
+
+The Blender derivative is retargeted by `tools/retarget_mixamo_fbx.py` and
+baked by `tools/bake_male_gait_cycle.gd` into the independent library:
+
+```text
+res://animations/mixamo_holding_walk_root_fixed.tres
+```
+
+The complete rebuild is reproducible with:
+
+```sh
+"/Applications/Blender 4.5.app/Contents/MacOS/Blender" -b \
+  --python tools/mixamo_to_godot_root_motion.py -- \
+  --input "/Users/hotcat/Downloads/Holding Walk.fbx" \
+  --output assets/animations/mixamo_holding_walk_root_fixed.fbx
+"/Applications/Blender 4.5.app/Contents/MacOS/Blender" -b \
+  --python tools/retarget_mixamo_fbx.py -- \
+  --source assets/animations/mixamo_holding_walk_root_fixed.fbx \
+  --target assets/models/male_carrier/male_1785818633452_humanizer_proxy.glb \
+  --output caches/mixamo_holding_walk_root_fixed.json \
+  --start 2 --end 61 --bone-set lower --include-root
+/Applications/Godot.app/Contents/MacOS/Godot --headless --path . \
+  --script res://tools/bake_male_gait_cycle.gd -- \
+  caches/mixamo_holding_walk_root_fixed.json \
+  animations/mixamo_holding_walk_root_fixed.tres \
+  mixamo_holding_walk_root_fixed
+```
+
+Play it from Emacs with:
+
+```elisp
+(godot-ots-carry-play-mixamo-holding-walk-root-fixed)
+```
+
+The source `Holding Walk.fbx` is an in-place 60-frame/24-fps clip: its
+evaluated pelvis returns to essentially the same horizontal position. The
+corrected library therefore contains an exact zero `Root` translation track,
+while preserving pelvis bob and leg rotations; it does not invent travel or
+double-advance `CarrierTrajectory`. For a downloaded Mixamo clip with real
+forward displacement, the same retargeter retains that displacement on the
+`Root` position track when the clip's end-to-start travel exceeds the
+five-centimetre in-place threshold. This avoids converting cyclic pelvis sway
+into accidental forward drift.
+The original `ots_carry_walk_cycle` and all existing H3 libraries are mounted
+unchanged.

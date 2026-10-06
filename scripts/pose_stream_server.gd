@@ -213,6 +213,14 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 		return _handle_trajectory_restart(scene, message)
 	if message_type == "walk.ots_carry.play":
 		return _handle_ots_carry_play(scene, message)
+	if message_type == "walk.ots_motion_matching.play":
+		return _handle_ots_motion_matching_play(scene, message)
+	if message_type == "walk.ots_motion_matching.set":
+		return _handle_ots_motion_matching_set(scene, message)
+	if message_type == "walk.ots_motion_matching.configure":
+		return _handle_ots_motion_matching_configure(scene, message)
+	if message_type == "walk.ots_motion_matching.status":
+		return _handle_ots_motion_matching_status(scene, message)
 	var controller_path := NodePath(str(message.get(
 		"controller_node", str(DEFAULT_WALK_CONTROLLER_PATH)
 	)))
@@ -354,6 +362,77 @@ func _handle_ots_carry_play(scene: Node, message: Dictionary) -> Dictionary:
 	result["target_node"] = str(target.get_path())
 	return result
 
+func _resolve_ots_owner(scene: Node, message: Dictionary) -> Node:
+	var target_name := str(message.get("target_node", "OTSCarryClayProxy"))
+	var target := scene.get_node_or_null(NodePath(target_name)) as Node
+	if target == null and str(scene.name) == target_name:
+		target = scene
+	if target == null and not target_name.contains("/"):
+		var matches: Array[Node] = []
+		_find_nodes_by_name(scene, target_name, matches)
+		if matches.size() == 1:
+			target = matches[0]
+	return target
+
+func _handle_ots_motion_matching_play(scene: Node, message: Dictionary) -> Dictionary:
+	var target := _resolve_ots_owner(scene, message)
+	if target == null:
+		return {"type": "error", "error": "ots_carry_owner_not_found"}
+	if not target.has_method("editor_transport_play_motion_matching"):
+		return {"type": "error", "error": "motion_matching_transport_unavailable"}
+	var result := target.call("editor_transport_play_motion_matching", bool(message.get("restart", true))) as Dictionary
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = "walk.ots_motion_matching.playing"
+	result["target_node"] = str(target.get_path())
+	return result
+
+func _handle_ots_motion_matching_set(scene: Node, message: Dictionary) -> Dictionary:
+	var target := _resolve_ots_owner(scene, message)
+	if target == null:
+		return {"type": "error", "error": "ots_carry_owner_not_found"}
+	if not target.has_method("editor_transport_enable_motion_matching"):
+		return {"type": "error", "error": "motion_matching_transport_unavailable"}
+	var result := target.call("editor_transport_enable_motion_matching", bool(message.get("enabled", true))) as Dictionary
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = "walk.ots_motion_matching.set"
+	result["target_node"] = str(target.get_path())
+	return result
+
+func _handle_ots_motion_matching_status(scene: Node, message: Dictionary) -> Dictionary:
+	var target := _resolve_ots_owner(scene, message)
+	if target == null:
+		return {"type": "error", "error": "ots_carry_owner_not_found"}
+	if not target.has_method("editor_transport_motion_matching_status"):
+		return {"type": "error", "error": "motion_matching_transport_unavailable"}
+	var result := target.call("editor_transport_motion_matching_status") as Dictionary
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = "walk.ots_motion_matching.status"
+	result["target_node"] = str(target.get_path())
+	return result
+
+func _handle_ots_motion_matching_configure(scene: Node, message: Dictionary) -> Dictionary:
+	var target := _resolve_ots_owner(scene, message)
+	if target == null:
+		return {"type": "error", "error": "ots_carry_owner_not_found"}
+	if not target.has_method("editor_transport_configure_motion_matching"):
+		return {"type": "error", "error": "motion_matching_transport_unavailable"}
+	var options_value = message.get("options", {})
+	if not options_value is Dictionary:
+		return {"type": "error", "error": "motion_matching_options_must_be_object"}
+	var result := target.call("editor_transport_configure_motion_matching", options_value) as Dictionary
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = "walk.ots_motion_matching.configured"
+	result["target_node"] = str(target.get_path())
+	return result
+
 func _walk_response_type(message_type: String) -> String:
 	match message_type:
 		"walk.play": return "walk.playing"
@@ -361,6 +440,10 @@ func _walk_response_type(message_type: String) -> String:
 		"walk.restart": return "walk.restarted"
 		"walk.trajectory.restart": return "walk.trajectory.restarted"
 		"walk.ots_carry.play": return "walk.ots_carry.playing"
+		"walk.ots_motion_matching.play": return "walk.ots_motion_matching.playing"
+		"walk.ots_motion_matching.set": return "walk.ots_motion_matching.set"
+		"walk.ots_motion_matching.configure": return "walk.ots_motion_matching.configured"
+		"walk.ots_motion_matching.status": return "walk.ots_motion_matching.status"
 		"walk.collapse.play": return "walk.collapse.playing"
 		"walk.collapse.stop": return "walk.collapse.stopped"
 		"walk.refresh_trajectory": return "walk.trajectory_refreshed"

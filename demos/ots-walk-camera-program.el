@@ -30,6 +30,7 @@
   ;;  :viewport 1
   ;;  :smoothing-seconds 0.12)
 
+
   (godot-camera-confirm-carrier-trajectory-follow
    :viewport 1
    :smoothing-seconds 0.12)
@@ -51,15 +52,10 @@
   (godot-camera-g4 :seconds 0.1)
 
   (godot-camera-g2-orbit
-   :degrees 90.88
+   :degrees 5.88
    :pivot '(0.0 1.2 0.0)
    :duration 6.0
    :easing 'smooth)
-
-  ;; (godot-camera-g1 :x 1.2166 :y -1.5764 :z -3.3327
-  ;; 		   :duration 6.0
-  ;; 		   :easing 'smooth)
-
 
   (godot-camera-g4 :seconds 0.75)
 
@@ -68,35 +64,27 @@
 
   ;; Start the OTS carrier animation.
   ;; (godot-ots-carry-play-walk-cycle)
-  ;; (godot-ots-carry-play-h3-heavy-load-hybrid)
-  (godot-ots-carry-play-mixamo-walking-male-godot-direct)
+  (godot-ots-carry-play-h3-heavy-load-hybrid)
 
   ;; Record exactly 9 seconds and match the selected viewport resolution.
   ;; The camera program itself is 7.85 seconds (0.1 + 7.0 + 0.75), so the
   ;; recorder holds the final camera pose for the remaining 1.15 seconds.
   ;; Do not provide :resolution: auto-resolution follows the chosen viewport.
-
   (godot-walk-record-camera-motion
-   ;; :motion-source 'stationary
    :duration 9.0
    :fps 24
    :start-delay 0.1
    ;; Release trajectory/camera follow at 6 s and hold that camera transform
    ;; while the character and recording continue to the 9 s endpoint.
-   :camera-follow-stop-at 6.8
+   :camera-follow-stop-at 6.0
    :auto-resolution t
-	:viewport 1)
+   :viewport 1)
+
   ;; Start the camera program after recording has been prepared.
   (godot-camera-play t))
 
 
 (godot-camera-release-follow)
-
-
-(godot-camera-confirm-carrier-trajectory-follow
- :viewport 1
- :smoothing-seconds 0.12)
-
 
 (defun restart-ots-carrier ()
   (interactive)
@@ -111,37 +99,5 @@
    :duration 9.0
    :fps 24
    :start-delay 0.1
-   ;; Release trajectory/camera follow at 6 s and hold that camera transform
-   ;; while the character and recording continue to the 9 s endpoint.
-   :camera-follow-stop-at 6.0
-   :auto-resolution t
-   :viewport 1)
-
-(godot-ots-carry-play-mixamo-walking-root-motion)
-
-(godot-ots-carry-play-mixamo-walking-male-godot-direct)
-
-  (godot-ots-carry-play-h3-heavy-load-hybrid)
-
-  ;; Record exactly 9 seconds and match the selected viewport resolution.
-  ;; The camera program itself is 7.85 seconds (0.1 + 7.0 + 0.75), so the
-  ;; recorder holds the final camera pose for the remaining 1.15 seconds.
-  ;; Do not provide :resolution: auto-resolution follows the chosen viewport.
-
-
-(godot-camera-confirm-carrier-trajectory-follow
- :viewport 1
- :smoothing-seconds 0.12)
-
-  (godot-ots-carry-play-mixamo-walking-male-godot-direct)
-
-  (godot-walk-record-camera-motion
-   ;; :motion-source 'stationary
-   :duration 9.0
-   :fps 24
-   :start-delay 0.1
-   ;; Release trajectory/camera follow at 6 s and hold that camera transform
-   ;; while the character and recording continue to the 9 s endpoint.
-   :camera-follow-stop-at 0.1
    :auto-resolution t
    :viewport 1)

@@ -441,7 +441,7 @@ relative handle deltas."
 
 (defun godot-camera-play (&optional restart)
   "Play the loaded Godot program; with prefix RESTART, start at zero."
-  (interactive "P")
+  (interactive (list (not current-prefix-arg)))
   (godot-camera--send "camera.program.play"
                       `("restart" . ,(if restart t :json-false))))
 
@@ -703,8 +703,8 @@ AnimationPlayer and animation name are resolved by the OTS carry scene."
 
 ANIMATION is the AnimationPlayer name, including its library namespace when
 needed.  This is useful for comparing the raw H3 capture, the corrected solve,
-and the conservative `h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid'
-clip without changing the scene's authored autoplay.  With RESTART non-nil,
+  and the raw `h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid' clip without
+  changing the scene's authored autoplay.  With RESTART non-nil,
 reset the carrier trajectory before playback."
   (interactive
    (list (read-string "OTS animation: "
@@ -718,15 +718,122 @@ reset the carrier trajectory before playback."
 
 ;;;###autoload
 (defun godot-ots-carry-play-h3-heavy-load-hybrid (&optional restart)
-  "Play the conservative H3 heavy-load OTS gait.
+  "Play the smoothed H3 heavy-load OTS gait.
 
-The clip keeps the authored lower-body OTS gait and applies the corrected H3
-load response to the upper body, avoiding the raw capture's abrupt spin and
-torso swing.  A prefix argument disables the trajectory reset."
+  The clip keeps the authored lower-body OTS gait and applies the corrected H3
+  load response to the upper body after a cyclic five-key filter.  This is the
+  preferred H3 comparison because it removes high-frequency torso, neck, and
+  arm jitter while preserving the usable foot timing.  A prefix argument
+  disables the trajectory reset."
+  (interactive "P")
+  (godot-ots-carry-play-animation
+   "h3_heavy_load_hybrid_smooth/ots_h3_heavy_load_walk_hybrid_smooth"
+   (not restart)))
+
+;;;###autoload
+(defun godot-ots-carry-play-h3-heavy-load-hybrid-raw (&optional restart)
+  "Play the unfiltered H3 heavy-load capture for comparison.
+
+  This deliberately keeps the original upper-body capture so it can be
+  compared against `godot-ots-carry-play-h3-heavy-load-hybrid'.  A prefix
+  argument disables the trajectory reset."
   (interactive "P")
   (godot-ots-carry-play-animation
    "h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid"
    (not restart)))
+
+;;;###autoload
+(defun godot-ots-carry-play-mixamo-walking-male-godot-direct (&optional restart)
+  "Play the seam-safe Mixamo gait copied from Godot's imported Standard Walk FBX.
+
+The lower-body and root tracks are copied from Godot's FBX import without
+another Blender quaternion conversion.
+This preserves the knee orientation that plays correctly in Mixamo.  The
+looped clip carries a six-frame quaternion seam blend and a small, explicit
+pelvis floor correction so both ankle chains begin on the OTS walk plane
+instead of floating above it.  The root track drives RootMotionSampler and is
+consumed by CarrierTrajectory at the scene's 0.78 m/s speed. The OTS upper
+body and hand contacts remain authored."
+  (interactive "P")
+  (godot-ots-carry-play-animation
+   "mixamo_walking_male_godot_direct/mixamo_walking_male_godot_direct_loop"
+   (not restart)))
+
+;;;###autoload
+(defun godot-ots-carry-play-mixamo-walking-male-godot-direct-loop (&optional restart)
+  "Play the seam-blended loop made from the slowed Mixamo Standard Walk.fbx.
+
+The loop keeps the updated 22% overdrive timing and the calibrated root stride
+for the 0.78 m/s loaded walk.  A six-frame quaternion seam blend closes the
+leg pose at the wrap while RootMotionSampler retains the full cycle distance.
+A prefix argument preserves the current trajectory position."
+  (interactive "P")
+  (godot-ots-carry-play-animation
+   "mixamo_walking_male_godot_direct/mixamo_walking_male_godot_direct_loop"
+   (not restart)))
+
+;;;###autoload
+(defun godot-ots-carry-play-motion-matching (&optional restart)
+  "Enable the safe GDScript OTS motion-matching selector and start it.
+
+The selector scores the existing carrier clips against the predefined
+CarrierTrajectory (speed, cornering, load request, and gait phase).  It does
+not load the incompatible upstream native extension.  With RESTART non-nil
+(the default), reset the trajectory before selecting the first clip; a prefix
+argument keeps the current route position."
+  (interactive (list (not current-prefix-arg)))
+  (godot-camera--send
+   "walk.ots_motion_matching.play"
+   `("target_node" . ,godot-camera-ots-carry-node)
+   `("restart" . ,(if restart t :json-false))))
+
+;;;###autoload
+(defun godot-ots-carry-set-motion-matching (enabled)
+  "Enable or disable the project-local OTS motion-matching selector.
+
+ENABLED is a Lisp boolean.  Disabling the selector leaves the currently
+evaluated pose and AnimationPlayer selection intact; use one of the regular
+OTS playback commands to choose another clip explicitly."
+  (interactive (list (not current-prefix-arg)))
+  (godot-camera--send
+   "walk.ots_motion_matching.set"
+   `("target_node" . ,godot-camera-ots-carry-node)
+   `("enabled" . ,(if enabled t :json-false))))
+
+;;;###autoload
+(defun godot-ots-carry-motion-matching-status ()
+  "Request the current OTS motion-matching selector status from Godot."
+  (interactive)
+  (godot-camera--send
+   "walk.ots_motion_matching.status"
+   `("target_node" . ,godot-camera-ots-carry-node)))
+
+;;;###autoload
+(cl-defun godot-ots-carry-configure-motion-matching
+    (&key desired-load desired-speed-mps matching-interval-seconds blend-seconds
+          (select-now t))
+  "Tune the project-local OTS motion-matching selector.
+
+DESIRED-LOAD is normalized from 0 (ordinary walk) to 1 (heavy carry).
+DESIRED-SPEED-MPS, MATCHING-INTERVAL-SECONDS, and BLEND-SECONDS are optional
+numeric overrides.  SELECT-NOW causes an immediate reselection when the
+selector is enabled.  Omitted keys preserve the Inspector values."
+  (interactive
+   (list :desired-load (read-number "Desired load [0..1]: " 0.72)
+         :desired-speed-mps (read-number "Desired speed (m/s): " 0.78)
+         :matching-interval-seconds (read-number "Match interval (s): " 0.18)
+         :blend-seconds (read-number "Blend time (s): " 0.16)))
+  (let ((options nil))
+    (when desired-load (push `("desired_load" . ,desired-load) options))
+    (when desired-speed-mps (push `("desired_speed_mps" . ,desired-speed-mps) options))
+    (when matching-interval-seconds
+      (push `("matching_interval_seconds" . ,matching-interval-seconds) options))
+    (when blend-seconds (push `("blend_seconds" . ,blend-seconds) options))
+    (push `("select_now" . ,(if select-now t :json-false)) options)
+    (godot-camera--send
+     "walk.ots_motion_matching.configure"
+     `("target_node" . ,godot-camera-ots-carry-node)
+     `("options" . ,options))))
 
 (defun godot-walk--motion-source-name (source)
   "Normalize SOURCE to the Godot motion-source protocol name."
@@ -755,7 +862,8 @@ torso swing.  A prefix argument disables the trajectory reset."
 (cl-defun godot-female-walk-record-camera-motion
     (&key duration fps resolution start-delay (keep-frames :unspecified)
           viewport (auto-clip-to-camera-program :unspecified)
-          (program-end-padding 0.0) motion-source (auto-resolution t))
+          (program-end-padding 0.0) motion-source (auto-resolution t)
+          camera-follow-stop-at)
   "Start or stop OTS editor-camera recording with optional capture settings.
 
 DURATION is seconds, FPS is one of 12/24/30, and RESOLUTION is `(WIDTH HEIGHT)'.
@@ -767,9 +875,15 @@ the loaded camera program's duration.  PROGRAM-END-PADDING adds a final hold;
 use zero to stop exactly at the program end, or a negative value to clip early.
 MOTION-SOURCE selects the motion owner for this take: `walk-cycle' keeps the
 legacy gait evaluator active, `stationary' freezes the current character pose
-and root transform, and `external-pose' yields pose ownership to pose.apply or
+and root transform (including OTS carrier AnimationPlayer, trajectory,
+attachment lag, and secondary motion), and `external-pose' yields pose ownership to pose.apply or
 pose.frame retargeting.  The source is sent with the recording request so a
 shot function does not depend on stale editor state.
+CAMERA-FOLLOW-STOP-AT is an optional non-negative timestamp in the recorded
+take, in seconds.  At that fixed-step time the current editor-camera transform
+is held and trajectory/camera follow is released; recording and character
+motion continue.  This is useful for a tracking move that should become a
+locked-off shot after a specified moment.
 The symbol `camera-program' is also accepted as DURATION shorthand.  Omitting
 all options preserves the dock's current values.  Calling the function while
 recording still stops the active take.  In an OTS carry scene this command is
@@ -782,6 +896,11 @@ request to OTS Render Capture directly."
          (auto-clip (or program-duration-p
                         (and auto-option-specified auto-clip-to-camera-program)))
          (options nil))
+    (when camera-follow-stop-at
+      (unless (and (numberp camera-follow-stop-at)
+                   (>= camera-follow-stop-at 0.0))
+        (user-error ":camera-follow-stop-at must be a non-negative number"))
+      (push `("camera_follow_stop_at" . ,camera-follow-stop-at) options))
     (when (and duration (not program-duration-p))
       (unless (numberp duration)
         (user-error ":duration must be a number or the symbol camera-program"))

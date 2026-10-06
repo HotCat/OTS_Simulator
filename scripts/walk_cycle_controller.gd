@@ -488,7 +488,12 @@ func editor_transport_record_camera_motion(options: Dictionary = {}) -> Dictiona
 ## Without it, a slow avatar render lets the editor's normal _process(delta)
 ## advance several gait seconds while only one frame is being written, which
 ## produces an apparently fast-forwarded MP4.
-func editor_capture_begin_fixed_step() -> Dictionary:
+func editor_capture_begin_fixed_step(options: Dictionary = {}) -> Dictionary:
+	# OTS Render Capture passes the take options directly so a request routed
+	# through the editor service has the same motion ownership as the legacy
+	# walk-transport path.
+	if options.has("motion_source"):
+		editor_transport_set_motion_source(str(options.get("motion_source")))
 	var was_playing := _playing or preview_in_editor
 	_capture_fixed_step_active = true
 	_capture_resume_playing = was_playing

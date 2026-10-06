@@ -5,35 +5,62 @@
 [ext_resource type="PackedScene" uid="uid://d0d7tm4s717dl" path="res://assets/environments/coffebar_street/coffebar_street_clay_proxy.glb" id="3_8ijel"]
 [ext_resource type="AnimationLibrary" uid="uid://c2y0uok48etp5" path="res://animations/ots_carry_walk_cycle.tres" id="4_carry_motion"]
 [ext_resource type="PackedScene" uid="uid://gs3qpj57oy40" path="res://assets/models/vehicles/beijing_ev_bus/beijing_ev_bus_sam3d_clay_proxy.glb" id="5_bus_proxy"]
-[ext_resource type="AnimationLibrary" path="res://animations/ots_h3_heavy_load_walk_hybrid.tres" id="8_h3_heavy_load_hybrid"]
+[ext_resource type="AnimationLibrary" uid="uid://dy0ino7w6y2gv" path="res://animations/ots_h3_heavy_load_walk_hybrid.tres" id="8_h3_heavy_load_hybrid"]
+[ext_resource type="AnimationLibrary" uid="uid://dcg0npqtiv6kv" path="res://animations/ots_h3_heavy_load_walk_hybrid_smooth.tres" id="10_h3_heavy_load_hybrid_smooth"]
+[ext_resource type="Script" uid="uid://c4wgtat82gr5t" path="res://scripts/ots_motion_matching_controller.gd" id="11_motion_matching"]
+[ext_resource type="AnimationLibrary" uid="uid://dw6ei0omogk3s" path="res://animations/mixamo_walking_male_godot_direct.tres" id="16_mixamo_walking_male_godot_direct"]
 
 [node name="OTSCarryClayProxy" type="Node3D" unique_id=2077530984]
 process_priority = 100
 editor_description = "Render-agnostic procedural OTS carry block. Male gait drives a lagged pelvis follow, tunable secondary dangle, and optional carrier hand-contact IK; the authored female FK pose remains the baseline."
 script = ExtResource("1_5u1f4")
+carrier_height_above_plane = 0.08700000000000019
+carrier_walk_speed_mps = 1.09
 trajectory_corner_smoothing = 1.0
-trajectory_samples_per_segment = 32
-trajectory_heading_lookahead_ratio = 0.08
-trajectory_heading_smoothing_seconds = 0.12
+carrier_contact_speed = 1.56
+carrier_foot_lock_planar_strength = 0.88
+carrier_foot_lock_vertical_strength = 0.84
 preview_female_attachment_in_editor = true
 follow_shoulder_rotation = true
 auto_calibrate_pelvis_offset = false
-female_pelvis_in_shoulder = Transform3D(-0.23478374, -0.2949257, 0.9262266, 0.9231022, 0.23090369, 0.30751538, -0.30456316, 0.92720103, 0.21803468, -0.12193596, 0.1387006, -0.06687239)
+female_pelvis_in_shoulder = Transform3D(0.28667346, -0.25247473, 0.924123, 0.9548766, 0.1531325, -0.25438383, -0.07728678, 0.9554065, 0.28496167, -0.08965648, 0.18698215, 0.011779189)
 preview_procedural_motion_in_editor = true
 rhythm_source = 1
-gait_phase_offset = -0.03618067539384246
+gait_cycle_seconds = 0.8099999999999999
+gait_phase_offset = -0.00598647933434056
+secondary_motion_lag_seconds = 0.22
+measured_foot_contact_height = 0.025
 leg_swing_degrees = 4.0
-knee_dangle_degrees = 3.0
-foot_dangle_degrees = 6.1
-arm_swing_degrees = 7.2
-forearm_dangle_degrees = 5.7
-head_sway_degrees = 8.1
-head_nod_degrees = 8.3
-torso_bob_degrees = 6.4
+knee_dangle_degrees = 7.0
+foot_dangle_degrees = 9.8
+arm_swing_degrees = 13.6
+forearm_dangle_degrees = 8.5
+head_sway_degrees = 8.3
+head_nod_degrees = 6.9
+torso_bob_degrees = 7.5
+spine_sway_degrees = 7.1
+arm_swing_axis = Vector3(2.41, 0.23, 1.65)
+forearm_dangle_axis = Vector3(1.3, 8.51, 0.08)
+spine_sway_axis = Vector3(10.15, 5.16, 3.5)
+hand_contact_ik_enabled = true
+right_hand_contact_influence = 0.88
+left_hand_contact_influence = 0.92
+carried_thigh_bone = "RightUpperLeg"
+female_pelvis_contact_offset = Transform3D(-0.8047986, -0.27563468, -0.525669, 0.36273447, -0.9294163, -0.06800499, -0.4698195, -0.24540418, 0.8479709, 0.105891705, -0.06088972, -0.1104331)
+female_thigh_contact_offset = Transform3D(0.8008624, -0.0689507, -0.59486806, 0.54648185, 0.49040157, 0.6788796, 0.24491638, -0.8687683, 0.4304257, 0.15723085, 0.36116874, -0.012528777)
+right_hand_contact_pole_offset = Transform3D(-0.69476724, -0.29786235, 0.6546578, 0.5864715, 0.2922905, 0.75539255, -0.41635323, 0.90876, -0.028386101, -0.45756543, 1.3831935, 0.092448235)
+left_hand_contact_pole_offset = Transform3D(-0.098943576, 0.08015381, -0.9918597, -0.87853146, 0.46106675, 0.12489802, 0.46732444, 0.88373786, 0.024797976, 0.32299352, 1.2830033, 0.12341404)
+right_hand_contact_pole_captured = true
+left_hand_contact_pole_captured = true
 metadata/source_manual_pose_scene = "res://demos/my_manual_rig_pose.tscn"
 metadata/street_proxy_scene = "res://assets/environments/coffebar_street/coffebar_street_clay_proxy.glb"
 metadata/interaction_mode = "ots_carry"
 metadata/initial_female_pose = "res://poses/female-poses.gdpose::ots_female_20260925_211705"
+
+[node name="OTSMotionMatching" type="Node" parent="." unique_id=180376109]
+process_priority = 120
+editor_description = "Safe GDScript motion-matching-style selector. Opt in with the inspector button or godot-ots-carry-play-motion-matching; it scores the existing gait clips against CarrierTrajectory without loading a native extension."
+script = ExtResource("11_motion_matching")
 
 [node name="ManualCarryBlock" parent="." unique_id=1534360198 instance=ExtResource("2_mdf3b")]
 
@@ -44,25 +71,28 @@ visible = false
 visible = false
 
 [node name="MaleCarrier" parent="ManualCarryBlock" index="3" unique_id=1025910933]
-transform = Transform3D(0.149352, 0, 0.9887842, 0, 1, 0, -0.9887842, 0, 0.149352, -3.9074202, 0.13038534, -2.8123534)
+transform = Transform3D(0.5566478, 0, -0.8307486, 0, 1, 0, 0.8307486, 0, 0.5566478, 2.6376042, 0.19803372, -2.3634903)
 sync_to_physics = false
 
 [node name="Skeleton3D" parent="ManualCarryBlock/MaleCarrier" index="0" unique_id=1467335169]
-bones/1/rotation = Quaternion(-0.026605843, 0.037406128, 0.01552571, 0.9988253)
-bones/2/rotation = Quaternion(-0.004822477, 0.064133294, 0.9978422, -0.013215521)
-bones/3/rotation = Quaternion(0.051724967, 0.993676, -0.09909167, 0.01065429)
-bones/4/rotation = Quaternion(0.07414545, 0.691662, -0.71798855, 0.024466915)
-bones/6/rotation = Quaternion(-0.0034702541, -0.04436871, 0.99897206, -0.008613431)
-bones/7/rotation = Quaternion(-0.04939368, 0.99841845, 0.026834644, 0.0008897051)
-bones/8/rotation = Quaternion(-0.049627885, 0.6318483, -0.77333075, -0.016264206)
+process_priority = 101
+bones/1/position = Vector3(-2.910383e-11, 0.8674728, -0.003458753)
+bones/2/rotation = Quaternion(0.05866117, -0.10912815, 0.98882794, 0.08288096)
+bones/3/rotation = Quaternion(0.008617387, 0.9895018, -0.12619548, -0.06990637)
+bones/4/rotation = Quaternion(0.050102554, 0.56248677, -0.8228788, -0.06300061)
+bones/6/rotation = Quaternion(-0.04558053, 0.3200357, 0.946246, 0.010862273)
+bones/7/rotation = Quaternion(0.027937332, 0.9917248, -0.08240257, -0.09439965)
+bones/8/rotation = Quaternion(0.020510353, 0.6492018, -0.757655, -0.06383742)
 bones/10/rotation = Quaternion(0.044003267, 0.0026246372, -0.0034226524, 0.9990221)
 bones/11/rotation = Quaternion(0.008879839, 0.014523295, 0.013551919, 0.99976325)
 bones/12/rotation = Quaternion(-0.044778507, 0.017725091, -0.0003288424, 0.9988396)
-bones/13/rotation = Quaternion(0.4172197, 0.5390865, 0.6424556, -0.35009187)
+bones/13/rotation = Quaternion(0.4172197, 0.5390865, 0.64245564, -0.35009187)
 bones/14/rotation = Quaternion(0.5941274, 0.7975279, 0.104358844, 0.008435343)
-bones/15/rotation = Quaternion(-0.09199468, 0.83625233, -0.25554284, -0.4763579)
-bones/16/rotation = Quaternion(-0.044323266, 0.7086425, -0.26469612, 0.6525315)
-bones/35/rotation = Quaternion(0.38030404, -0.58242095, 0.5034922, 0.5124942)
+bones/15/rotation = Quaternion(0.09199469, -0.8362524, 0.25554287, 0.47635794)
+bones/16/rotation = Quaternion(-0.044323277, 0.7086425, -0.26469615, 0.6525315)
+bones/32/rotation = Quaternion(0.68849057, -0.583192, -0.18629743, -0.38879466)
+bones/34/rotation = Quaternion(0.6144975, 0.7226809, 0.07145319, 0.30825242)
+bones/35/rotation = Quaternion(0.38030407, -0.58242095, 0.50349224, 0.5124942)
 bones/51/rotation = Quaternion(0.08022042, 0.009214214, 0.013970571, 0.9966366)
 bones/52/rotation = Quaternion(-0.029757, 0.018358404, -0.015120116, 0.99927425)
 
@@ -71,11 +101,10 @@ visible = true
 
 [node name="carry_right_arm_ik" type="TwoBoneIK3D" parent="ManualCarryBlock/MaleCarrier/Skeleton3D" index="1" unique_id=447179093]
 editor_description = "Optional carrier contact solve: right hand follows FemalePelvisContact (hip hold). Enable from OTSCarryClayProxy.hand_contact_ik_enabled."
-active = false
-influence = 0.0
+influence = 0.88
 setting_count = 1
-settings/0/target_node = NodePath("../../../CarryInteractionAnchors/FemalePelvisContact")
-settings/0/pole_node = NodePath("../../../CarryInteractionAnchors/MaleRightArmPole")
+settings/0/target_node = NodePath("../../../../CarryInteractionAnchors/FemalePelvisContact")
+settings/0/pole_node = NodePath("../../../../CarryInteractionAnchors/MaleRightArmPole")
 settings/0/root_bone_name = "RightUpperArm"
 settings/0/root_bone = 33
 settings/0/middle_bone_name = "RightLowerArm"
@@ -88,11 +117,10 @@ settings/0/extend_end_bone = false
 
 [node name="carry_left_arm_ik" type="TwoBoneIK3D" parent="ManualCarryBlock/MaleCarrier/Skeleton3D" index="2" unique_id=1054634948]
 editor_description = "Optional carrier contact solve: left hand follows FemaleThighContact (thigh hold). Enable from OTSCarryClayProxy.hand_contact_ik_enabled."
-active = false
-influence = 0.0
+influence = 0.92
 setting_count = 1
-settings/0/target_node = NodePath("../../../CarryInteractionAnchors/FemaleThighContact")
-settings/0/pole_node = NodePath("../../../CarryInteractionAnchors/MaleLeftArmPole")
+settings/0/target_node = NodePath("../../../../CarryInteractionAnchors/FemaleThighContact")
+settings/0/pole_node = NodePath("../../../../CarryInteractionAnchors/MaleLeftArmPole")
 settings/0/root_bone_name = "LeftUpperArm"
 settings/0/root_bone = 14
 settings/0/middle_bone_name = "LeftLowerArm"
@@ -103,6 +131,34 @@ settings/0/end_bone = 16
 settings/0/use_virtual_end = false
 settings/0/extend_end_bone = false
 
+[node name="carry_left_hand_contact_copy" type="CopyTransformModifier3D" parent="ManualCarryBlock/MaleCarrier/Skeleton3D" index="3" unique_id=336105979]
+editor_description = "Copies the captured FemaleThighContact orientation to the carrier's left hand after arm IK. Controlled by OTSCarryClayProxy.left_hand_contact_orientation_enabled."
+influence = 0.92
+setting_count = 1
+settings/0/amount = 1.0
+settings/0/apply_bone_name = "LeftHand"
+settings/0/apply_bone = 16
+settings/0/reference_type = 1
+settings/0/reference_node = NodePath("../../../../CarryInteractionAnchors/FemaleThighContact")
+settings/0/copy = 7
+settings/0/axes = 7
+settings/0/invert = 0
+settings/0/additive = false
+
+[node name="carry_right_hand_contact_copy" type="CopyTransformModifier3D" parent="ManualCarryBlock/MaleCarrier/Skeleton3D" index="4" unique_id=728321776]
+editor_description = "Copies the captured FemalePelvisContact orientation to the carrier's right hand after arm IK. Controlled by OTSCarryClayProxy.right_hand_contact_orientation_enabled."
+influence = 0.88
+setting_count = 1
+settings/0/amount = 1.0
+settings/0/apply_bone_name = "RightHand"
+settings/0/apply_bone = 35
+settings/0/reference_type = 1
+settings/0/reference_node = NodePath("../../../../CarryInteractionAnchors/FemalePelvisContact")
+settings/0/copy = 7
+settings/0/axes = 7
+settings/0/invert = 0
+settings/0/additive = false
+
 [node name="AsymmetricObstacleField" parent="ManualCarryBlock" index="4" unique_id=103185197]
 visible = false
 
@@ -110,44 +166,100 @@ visible = false
 distance = 2.9
 
 [node name="IK_character" parent="ManualCarryBlock" index="7" unique_id=1310603554]
-transform = Transform3D(-0.26533088, -0.13556173, -0.95452183, -0.19597787, 0.97691596, -0.084272, 0.94399256, 0.16470915, -0.28579232, -3.8732748, 0.67541504, -2.8598402)
-saved_fk_pose = Array[Transform3D]([Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0), Transform3D(0.9998489, 0.016393535, -0.0057836347, -0.017350115, 0.9203413, -0.39073113, -0.0010825465, 0.39077243, 0.9204867, -1.1641532e-10, 0.9884178, 0.023753814), Transform3D(-0.95270944, -0.193049, 0.23468557, 0.19450407, -0.9807519, -0.01716045, 0.23348108, 0.029298373, 0.97191983, 0.105, -0.013, -0.007), Transform3D(-1, 0, 0, 0, 0.99992585, -0.0121770995, 0, -0.0121770995, -0.99992585, -0.03868507, 0.4374084, 0.03226396), Transform3D(-1, 0, 0, 0, -0.024757981, -0.99969345, 0, -0.99969345, 0.02475804, 0.038143888, 0.45651996, 0.030496074), Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, -0.003209278, 0.12127262, -0.06668268), Transform3D(-1, 0, 0, 0, -0.999868, -0.016235825, 0, -0.016235821, 0.9998682, -0.104936, -0.013455749, -0.0068874434), Transform3D(-1, 0, 0, 0, 0.99992585, 0.0121770995, 0, 0.0121770995, -0.99992585, 0.03868507, 0.4374084, 0.03226396), Transform3D(-1, 0, 0, 0, 0.02475804, -0.99969345, 0, -0.99969345, -0.024757981, -0.038143888, 0.45651996, 0.030496074), Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0.003209278, 0.12127262, -0.06668268), Transform3D(0.99916416, 0.035946634, -0.019462444, -0.039729726, 0.7419599, -0.6692659, -0.009617504, 0.66947985, 0.7427679, 5.820766e-11, 0.07697779, -0.04739248), Transform3D(0.999082, 0.04059169, -0.013690745, -0.041056875, 0.8161128, -0.57643235, -0.012225168, 0.57646525, 0.8170302, 5.820766e-11, 0.06884527, 0.021095702), Transform3D(0.9993345, 0.034439977, -0.012019693, -0.036050234, 0.8822113, -0.4694715, -0.0055646794, 0.46959248, 0.8828656, 0, 0.09665239, 0.012126298), Transform3D(-0.8038651, 0.590378, -0.072488844, 5.662441e-07, 0.12186931, 0.9925462, 0.5948117, 0.797873, -0.09796679, 0.024171557, 0.23715448, 0.02314213), Transform3D(-0.87890863, 0.13866569, 0.4563901, 0.4755241, 0.17974393, 0.86114395, 0.037377797, 0.97389096, -0.22391735, -0.001098182, 0.13717544, -0.014610887), Transform3D(0.5067067, 0.04180428, -0.86110437, -0.023120854, 0.99912333, 0.034899533, 0.8618084, 0.0022256393, 0.5072291, -0.0125595555, 0.18381459, 0.19971895), Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0.13105595, 0.122250795, 0.15833786), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.091662645, 0.026541859, 0.04232037), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.020148247, 0.003423959, 0.015003681), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.015780717, -0.0004746616, 0.016213894), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.073916554, 0.041898876, 0.053155065), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.019803464, 0.007627785, 0.025433064), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.016443193, 0.002755344, 0.021209478), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.037871078, 0.05101201, 0.06781161), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.007426396, 0.0062549114, 0.018790007), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0052351058, 0.0016762018, 0.014150977), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.057022423, 0.049496084, 0.060057282), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.0133113265, 0.009241939, 0.023952723), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.012083143, 0.0041395426, 0.020787597), Transform3D(4.1723249e-07, -0.5769999, 0.8159999, 5.960464e-08, 0.8160001, 0.5769998, -0.99999994, -1.7870528e-07, 4.169789e-07, -0.0428247, 0.0006455481, 0.008879662), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009027839, -0.0044077625, -0.028295595), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.014596938, 0.007677435, -0.0315527), Transform3D(0.16501892, -0.9862528, -0.008606911, -2.9802322e-08, -0.008726478, 0.99996185, -0.9862904, -0.16501257, -0.0014400482, -0.024171557, 0.23715448, 0.02314213), Transform3D(0.2743301, -0.68205136, -0.6779002, -0.13829075, 0.6696366, -0.72970015, 0.95163983, 0.2939261, 0.08938008, 0.001098182, 0.13717544, -0.014610887), Transform3D(0.38034672, -0.105399236, 0.9188185, 0.023008235, 0.9942557, 0.10452847, -0.9245575, -0.018616673, 0.38058704, 0.0125595555, 0.18381459, 0.19971895), Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -0.13105595, 0.122250795, 0.15833786), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.091662645, 0.026541859, 0.04232037), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.020148247, 0.003423959, 0.015003681), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.015780717, -0.0004746616, 0.016213894), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.073916554, 0.041898876, 0.053155065), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.019803464, 0.007627785, 0.025433064), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.016443193, 0.002755344, 0.021209478), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.037871078, 0.05101201, 0.06781161), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.007426396, 0.0062549114, 0.018790007), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.0052351058, 0.0016762018, 0.014150977), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.057022423, 0.049496084, 0.060057282), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.0133113265, 0.009241939, 0.023952723), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.012083143, 0.0041395426, 0.020787597), Transform3D(4.1723249e-07, 0.5769999, -0.8159999, -5.960464e-08, 0.8160001, 0.5769998, 0.99999994, -1.7870528e-07, 4.169789e-07, 0.0428247, 0.0006455481, 0.008879662), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.009027839, -0.0044077625, -0.028295595), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.014596938, 0.007677435, -0.0315527), Transform3D(0.921297, 0.0062543764, 0.3888093, 0.0005737222, 0.9998477, -0.017442973, -0.38885924, 0.01629323, 0.9211529, -5.820766e-11, 0.31162882, 0.0021485556), Transform3D(0.87380636, -0.40138963, -0.27449724, 0.055341065, 0.6429089, -0.7639407, 0.48311463, 0.65234524, 0.5839913, 0, 0.110539556, 0.038479272), Transform3D(-0.9648286, -0.13692646, 0.22440295, 0.15605338, -0.98528236, 0.06975633, 0.21154886, 0.10232178, 0.97199607, -0.00023471582, 0.08204436, -0.112179875), Transform3D(1, 0, 0, 0, 0.99904823, 0.043619365, 0, -0.043619365, 0.99904823, 0.00010782773, 0.09556391, -0.0033741305), Transform3D(1, 0, 0, 0, 0.74108523, -0.67141086, 0, 0.67141086, 0.74108523, 3.0880372e-05, 0.08593064, 0.0017356972)])
+transform = Transform3D(-0.24885182, 0.3700841, 0.8950125, 0.9659761, 0.027676484, 0.25713918, 0.07039154, 0.9285545, -0.36437944, 2.5963418, 0.26791158, -3.008819)
+saved_fk_pose = Array[Transform3D]([Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0), Transform3D(0.83351815, -0.16029322, -0.5287269, -0.02475076, 0.9451929, -0.32557154, 0.55193555, 0.28445634, 0.78386927, -1.1641532e-10, 0.9884178, 0.023753814), Transform3D(-0.9534352, -0.23205471, 0.19264397, 0.16371499, -0.9346589, -0.3156101, 0.25329524, -0.2693751, 0.92912775, 0.105, -0.013, -0.007), Transform3D(-1.0000001, 0, 0, 0, 0.99791193, 0.06458957, 0, 0.06458956, -0.99791193, -0.03868507, 0.4374084, 0.03226396), Transform3D(-1, 0, 0, 0, 0.44540003, -0.8953316, 0, -0.8953316, -0.4454001, 0.038143888, 0.45651996, 0.030496074), Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, -0.003209278, 0.12127262, -0.06668268), Transform3D(-1.0000002, 0, 0, 0, -0.99098945, -0.13394174, 0, -0.13394175, 0.9909892, -0.104936, -0.013455749, -0.0068874434), Transform3D(-1.0000005, 0, 0, 0, 0.9920584, -0.12577818, 0, -0.12577817, -0.99205863, 0.03868507, 0.4374084, 0.03226396), Transform3D(-0.9999999, 0, 0, 0, 0.30313516, -0.95294756, 0, -0.95294756, -0.30313504, -0.038143888, 0.45651996, 0.030496074), Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0.003209278, 0.12127262, -0.06668268), Transform3D(0.9354369, -0.3470732, -0.06706597, 0.04693712, 0.30999547, -0.9495787, 0.35036346, 0.8851232, 0.30627185, 5.820766e-11, 0.07697779, -0.04739248), Transform3D(0.9565952, 0.22683585, 0.18295121, -0.27231959, 0.91933405, 0.28401932, -0.103767514, -0.32151273, 0.94120234, 5.820766e-11, 0.06884527, 0.021095702), Transform3D(0.9948971, 0.044786103, -0.09040806, -0.09040813, 0.79350144, -0.60181534, 0.044785958, 0.6069182, 0.7935013, 0, 0.09665239, 0.012126298), Transform3D(-0.26723596, 0.96128345, -0.06721741, 2.9802292e-08, 0.06975434, 0.9975642, 0.96363, 0.2665853, -0.018640876, 0.024171557, 0.23715448, 0.02314213), Transform3D(0.25376, 0.11957347, 0.9598479, -0.045918334, 0.99270004, -0.11152637, -0.96617657, -0.015773688, 0.25739825, -0.001098182, 0.13717544, -0.014610887), Transform3D(0.5151562, 0.5048632, -0.6926234, -0.21847011, 0.85875905, 0.46346915, 0.8287852, -0.08744149, 0.5526926, -0.0125595555, 0.18381459, 0.19971895), Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0.13105595, 0.122250795, 0.15833786), Transform3D(0.98836327, -0.041689567, 0.14628538, 0.04857297, 0.99785864, -0.043801125, -0.14414608, 0.05039695, 0.98827213, -0.091662645, 0.026541859, 0.04232037), Transform3D(0.9910623, -0.13308342, 0.009183042, 0.13308342, 0.98162717, -0.13673653, 0.009183042, 0.13673653, 0.9905649, -0.020148247, 0.003423959, 0.015003681), Transform3D(0.99814886, -0.060788453, 0.0019019542, 0.060788453, 0.9961947, -0.062457137, 0.001901956, 0.062457137, 0.99804586, -0.015780717, -0.0004746616, 0.016213894), Transform3D(0.995353, -0.09610862, 0.0059680706, 0.09610864, 0.9876882, -0.12342974, 0.0059680687, 0.12342972, 0.9923354, -0.073916554, 0.041898876, 0.053155065), Transform3D(0.9888481, -0.14822742, 0.014383661, 0.14822736, 0.9702955, -0.1911932, 0.014383667, 0.19119315, 0.98144704, -0.019803464, 0.007627785, 0.025433064), Transform3D(0.99720174, -0.074670374, 0.0036093772, 0.074670374, 0.99254614, -0.09631458, 0.003609372, 0.09631458, 0.9953444, -0.016443193, 0.002755344, 0.021209478), Transform3D(0.97808826, -0.14299601, -0.15131134, 0.10432548, 0.96560305, -0.23817116, 0.18016438, 0.21716674, 0.9593637, -0.037871078, 0.05101201, 0.06781161), Transform3D(0.9934413, -0.112960555, 0.017728826, 0.11296059, 0.94551826, -0.30534324, 0.017728819, 0.30534312, 0.9520773, -0.007426396, 0.0062549114, 0.018790007), Transform3D(0.9977882, -0.06620399, 0.005978714, 0.06620401, 0.98162687, -0.1789556, 0.0059787096, 0.17895554, 0.983839, -0.0052351058, 0.0016762018, 0.014150977), Transform3D(0.9889507, -0.13572931, -0.059615854, 0.12127966, 0.9720218, -0.20115858, 0.08525106, 0.19170582, 0.97774243, -0.057022423, 0.049496084, 0.060057282), Transform3D(0.98896503, -0.14692773, 0.018984335, 0.14692773, 0.9563048, -0.25277153, 0.018984338, 0.25277153, 0.96733975, -0.0133113265, 0.009241939, 0.023952723), Transform3D(0.9968908, -0.078614265, 0.0053490773, 0.07861429, 0.98768806, -0.13524632, 0.0053490708, 0.13524629, 0.9907976, -0.012083143, 0.0041395426, 0.020787597), Transform3D(-0.0095083695, -0.61689466, 0.7862159, 0.012759803, 0.7861127, 0.61696756, -0.99987316, 0.015898306, 0.00039684476, -0.0428247, 0.0006455481, 0.008879662), Transform3D(0.99868524, -0.051169038, -0.0028404149, 0.051169038, 0.9925454, 0.11060692, -0.0028404095, -0.11060684, 0.9938602, -0.009027839, -0.0044077625, -0.028295595), Transform3D(0.99956983, -0.029288515, -0.0009282582, 0.029288495, 0.9975641, 0.063309945, -0.0009282565, -0.063309945, 0.99799347, -0.014596938, 0.007677435, -0.0315527), Transform3D(0.13917647, -0.99023056, 0.008508144, -0.00029838082, 0.008549806, 0.9999632, -0.9902675, -0.1391739, 0.0008944271, -0.024171557, 0.23715448, 0.02314213), Transform3D(0.22580718, -0.92475414, -0.3063347, 0.098260425, 0.3344736, -0.93726844, 0.96920377, 0.18154141, 0.16639327, 0.001098182, 0.13717544, -0.014610887), Transform3D(0.7142084, -0.1320886, 0.6873565, 0.080160126, 0.99100626, 0.10714905, -0.69532776, -0.021428168, 0.7183733, 0.0125595555, 0.18381459, 0.19971895), Transform3D(0.15333855, 0.10778493, -0.9822778, 0.35395622, 0.92208636, 0.15643449, 0.9226063, -0.37167078, 0.10324025, -0.13105595, 0.122250795, 0.15833786), Transform3D(0.98836327, 0.041689567, -0.14628538, -0.04857297, 0.99785864, -0.043801125, 0.14414608, 0.05039695, 0.98827213, 0.091662645, 0.026541859, 0.04232037), Transform3D(0.9910623, 0.13308342, -0.009183042, -0.13308342, 0.98162717, -0.13673653, -0.009183042, 0.13673653, 0.9905649, 0.020148247, 0.003423959, 0.015003681), Transform3D(0.99814886, 0.060788453, -0.0019019542, -0.060788453, 0.9961947, -0.062457137, -0.001901956, 0.062457137, 0.99804586, 0.015780717, -0.0004746616, 0.016213894), Transform3D(0.995353, 0.09610862, -0.0059680706, -0.09610864, 0.9876882, -0.12342974, -0.0059680687, 0.12342972, 0.9923354, 0.073916554, 0.041898876, 0.053155065), Transform3D(0.9888481, 0.14822742, -0.0143836625, -0.14822736, 0.9702955, -0.19119322, -0.014383671, 0.19119318, 0.98144704, 0.019803464, 0.007627785, 0.025433064), Transform3D(0.99720174, 0.074670374, -0.0036093772, -0.074670374, 0.99254614, -0.09631458, -0.003609372, 0.09631458, 0.9953444, 0.016443193, 0.002755344, 0.021209478), Transform3D(0.97808826, 0.14299601, 0.15131134, -0.10432548, 0.96560305, -0.23817116, -0.18016438, 0.21716674, 0.9593637, 0.037871078, 0.05101201, 0.06781161), Transform3D(0.9934413, 0.11296055, -0.017728824, -0.112960584, 0.94551826, -0.30534324, -0.01772882, 0.30534312, 0.9520773, 0.007426396, 0.0062549114, 0.018790007), Transform3D(0.9977882, 0.06620399, -0.005978714, -0.06620401, 0.98162687, -0.1789556, -0.0059787096, 0.17895554, 0.983839, 0.0052351058, 0.0016762018, 0.014150977), Transform3D(0.9889507, 0.13572931, 0.059615854, -0.12127966, 0.9720218, -0.20115858, -0.08525106, 0.19170582, 0.97774243, 0.057022423, 0.049496084, 0.060057282), Transform3D(0.98896503, 0.14692773, -0.018984335, -0.14692773, 0.9563048, -0.25277153, -0.018984338, 0.25277153, 0.96733975, 0.0133113265, 0.009241939, 0.023952723), Transform3D(0.9968908, 0.078614265, -0.0053490773, -0.07861429, 0.98768806, -0.13524632, -0.0053490708, 0.13524629, 0.9907976, 0.012083143, 0.0041395426, 0.020787597), Transform3D(-0.0095083695, 0.61689466, -0.7862159, -0.012759803, 0.7861127, 0.61696756, 0.99987316, 0.015898306, 0.00039684476, 0.0428247, 0.0006455481, 0.008879662), Transform3D(0.99868524, 0.051169038, 0.0028404149, -0.051169038, 0.9925454, 0.11060692, 0.0028404095, -0.11060684, 0.9938602, 0.009027839, -0.0044077625, -0.028295595), Transform3D(0.99956983, 0.029288515, 0.0009282582, -0.029288495, 0.9975641, 0.063309945, 0.0009282565, -0.063309945, 0.99799347, 0.014596938, 0.007677435, -0.0315527), Transform3D(0.96443224, 0.26422697, 0.0073848586, -0.25309986, 0.93115395, -0.2624743, -0.076229244, 0.2512696, 0.9649107, -5.820766e-11, 0.31162882, 0.0021485556), Transform3D(0.9454356, 0.15100506, -0.28870204, -0.1764309, 0.98222893, -0.06401938, 0.27390423, 0.11146218, 0.95527613, 0, 0.110539556, 0.038479272), Transform3D(-0.9648286, -0.13692647, 0.22440283, 0.1560534, -0.98528236, 0.069756344, 0.21154885, 0.102321856, 0.97199553, -0.00023471582, 0.08204436, -0.112179875), Transform3D(1, 0, 0, 0, 0.99904823, 0.043619208, 0, -0.043619208, 0.99904823, 0.00010782773, 0.09556391, -0.0033741305), Transform3D(1, 0, 0, 0, 0.74108523, -0.67141086, 0, 0.67141086, 0.74108523, 3.0880372e-05, 0.08593064, 0.0017356972)])
 
 [node name="Skeleton3D" parent="ManualCarryBlock/IK_character" index="0" unique_id=1277114286]
-transform = Transform3D(0.9848376, -0.005192563, 0.17340125, 0.000451833, 0.999625, 0.027368456, -0.17347832, -0.0268752, 0.98447126, 0.09790355, -0.017271042, -0.20651913)
-bones/1/rotation = Quaternion(0.19938712, -0.0011994013, -0.008609109, 0.97988224)
-bones/2/rotation = Quaternion(0.118451, 0.0030710194, 0.9881018, 0.098054916)
-bones/2/scale = Vector3(1.0000001, 1.0000001, 1)
-bones/3/rotation = Quaternion(0, 0.99998146, -0.0060886624, 0)
-bones/4/rotation = Quaternion(0, -0.69829863, 0.71580654, 0)
-bones/6/rotation = Quaternion(0, -0.00811818, 0.99996704, 0)
-bones/6/scale = Vector3(1, 0.9999998, 1)
-bones/7/rotation = Quaternion(0, 0.99998146, 0.0060886624, 0)
-bones/8/rotation = Quaternion(0, 0.71580654, -0.69829863, 0)
-bones/10/rotation = Quaternion(0.35862106, -0.0026372473, -0.02027206, 0.93325937)
-bones/10/scale = Vector3(1, 1, 0.99999994)
-bones/11/rotation = Quaternion(0.30246446, -0.00038449655, -0.021420626, 0.95291984)
-bones/12/rotation = Quaternion(0.24200073, -0.0016634844, -0.018165622, 0.9701046)
-bones/12/scale = Vector3(1, 1, 0.9999998)
-bones/13/rotation = Quaternion(0.20750447, 0.7112843, 0.62929106, -0.23454073)
-bones/13/scale = Vector3(1, 0.9999999, 1)
-bones/14/rotation = Quaternion(0.20326403, 0.75540876, 0.60729873, 0.13867074)
-bones/14/scale = Vector3(1.0000002, 0.9999999, 0.99999994)
-bones/15/rotation = Quaternion(-0.009411679, -0.49628308, -0.018701611, 0.8679083)
+transform = Transform3D(-0.058829673, 0.91022444, -0.40991747, -0.92182934, -0.2071235, -0.32760936, -0.38310236, 0.35860527, 0.85125583, 0.48212662, 0.65397334, -0.31294012)
+bones/1/rotation = Quaternion(0.16159852, -0.28627133, 0.03590568, 0.9437401)
+bones/1/scale = Vector3(0.999999, 0.99999946, 1)
+bones/2/rotation = Quaternion(0.114122696, -0.14970669, 0.9768856, 0.10128354)
+bones/2/scale = Vector3(0.9999999, 0.9999999, 0.99999994)
+bones/3/rotation = Quaternion(0, 0.99947786, 0.032311656, 0)
+bones/3/scale = Vector3(1.0000002, 1, 1.0000001)
+bones/4/rotation = Quaternion(0, 0.8501177, -0.5265928, 0)
+bones/4/scale = Vector3(1, 0.99999994, 0.99999994)
+bones/6/rotation = Quaternion(0, -0.06712224, 0.99774474, 0)
+bones/6/scale = Vector3(1.0000002, 1.0000001, 1)
+bones/7/rotation = Quaternion(0, 0.9980126, -0.06301431, 0)
+bones/7/scale = Vector3(1.0000002, 1, 1.0000001)
+bones/8/rotation = Quaternion(0, 0.8071974, -0.59028167, 0)
+bones/10/rotation = Quaternion(0.57427555, -0.13065857, 0.12332821, 0.7987028)
+bones/10/scale = Vector3(0.99999994, 1, 1)
+bones/11/rotation = Quaternion(-0.15496677, 0.07337658, -0.12774304, 0.97687405)
+bones/12/rotation = Quaternion(0.31933308, -0.03571666, -0.035716716, 0.94629544)
+bones/12/scale = Vector3(0.9999999, 1, 0.9999998)
+bones/13/rotation = Quaternion(0.4128106, 0.58215797, 0.54287225, -0.4426842)
+bones/13/scale = Vector3(0.999999, 0.99999964, 1)
+bones/14/rotation = Quaternion(0.030256318, 0.608593, -0.052292768, 0.79117924)
+bones/14/scale = Vector3(0.99999994, 1, 1)
+bones/15/rotation = Quaternion(-0.16101597, -0.4446657, -0.21141036, 0.8553666)
 bones/16/rotation = Quaternion(0, 0.70710677, 0, 0.70710677)
-bones/32/rotation = Quaternion(-0.54202986, 0.4548886, 0.4588757, 0.53732026)
-bones/33/rotation = Quaternion(0.35892665, -0.5713857, 0.19066547, 0.71297735)
-bones/33/scale = Vector3(0.9999999, 0.9999999, 0.9999999)
-bones/34/rotation = Quaternion(-0.037094675, 0.55527514, 0.038679834, 0.8299382)
-bones/34/scale = Vector3(0.9999998, 1, 1)
-bones/35/rotation = Quaternion(0, -0.70710677, 0, 0.70710677)
-bones/51/rotation = Quaternion(0.008605394, 0.19836684, -0.0014490149, 0.980089)
-bones/51/scale = Vector3(1, 1, 0.9999998)
-bones/52/rotation = Quaternion(0.40215242, -0.21512282, 0.12968804, 0.8804412)
-bones/52/scale = Vector3(1, 0.99999994, 1)
-bones/53/rotation = Quaternion(0.11006491, 0.043444615, 0.9902156, 0.07396871)
-bones/53/scale = Vector3(0.9999999, 0.99999994, 0.9999995)
-bones/54/rotation = Quaternion(-0.021814875, 0, 0, 0.99976206)
+bones/17/rotation = Quaternion(0.02362496, 0.072840475, 0.022637926, 0.9968067)
+bones/17/scale = Vector3(0.9999997, 0.9999999, 0.9999999)
+bones/18/rotation = Quaternion(0.06868447, 0, 0.06684947, 0.9953962)
+bones/19/rotation = Quaternion(0.03125832, -4.3697337e-10, 0.030423183, 0.99904823)
+bones/20/rotation = Quaternion(0.061905697, 4.671012e-10, 0.048202906, 0.9969173)
+bones/20/scale = Vector3(1, 0.9999999, 1)
+bones/21/rotation = Quaternion(0.09631451, -3.9878456e-09, 0.07467031, 0.99254614)
+bones/21/scale = Vector3(0.9999994, 0.99999976, 1)
+bones/22/rotation = Quaternion(0.04824728, 1.2246452e-09, 0.037404954, 0.9981348)
+bones/23/rotation = Quaternion(0.11523957, -0.08389179, 0.062593564, 0.9878077)
+bones/23/scale = Vector3(0.9999998, 0.9999993, 0.9999997)
+bones/24/rotation = Quaternion(0.15479454, 1.8885453e-09, 0.057265665, 0.9862856)
+bones/24/scale = Vector3(1, 0.99999964, 1)
+bones/25/rotation = Quaternion(0.08989164, 1.1695376e-09, 0.033255104, 0.9953962)
+bones/25/scale = Vector3(1, 0.9999997, 1)
+bones/26/rotation = Quaternion(0.098977275, -0.036497407, 0.06475018, 0.99230987)
+bones/26/scale = Vector3(1, 1, 0.9999996)
+bones/27/rotation = Quaternion(0.12778942, -9.41666e-10, 0.07427976, 0.9890159)
+bones/28/rotation = Quaternion(0.06783226, 1.5180789e-09, 0.039428685, 0.9969173)
+bones/28/scale = Vector3(1, 0.99999976, 1)
+bones/29/rotation = Quaternion(-0.22555701, 0.67001903, 0.23628092, 0.6666107)
+bones/29/scale = Vector3(0.9999998, 0.99939233, 0.9993921)
+bones/30/rotation = Quaternion(-0.05540681, -7.581137e-10, 0.025632348, 0.9981348)
+bones/30/scale = Vector3(0.9999993, 0.9999993, 1)
+bones/31/rotation = Quaternion(-0.031674266, -2.7665492e-10, 0.0146531835, 0.99939084)
+bones/31/scale = Vector3(0.9999993, 1, 1)
+bones/32/rotation = Quaternion(-0.5314443, 0.46596107, 0.4618355, 0.53586864)
+bones/32/scale = Vector3(0.99999994, 0.9999995, 0.9999998)
+bones/33/rotation = Quaternion(0.42571715, -0.48535377, 0.38926613, 0.65701485)
+bones/33/scale = Vector3(0.99999994, 1, 0.99999994)
+bones/34/rotation = Quaternion(-0.034745075, 0.37363905, 0.0573554, 0.925147)
+bones/35/rotation = Quaternion(-0.17889379, -0.64527273, 0.083389655, 0.7380151)
+bones/36/rotation = Quaternion(0.02362496, -0.072840475, -0.022637926, 0.9968067)
+bones/36/scale = Vector3(0.9999997, 0.9999999, 0.9999999)
+bones/37/rotation = Quaternion(0.06868447, 0, -0.06684947, 0.9953962)
+bones/38/rotation = Quaternion(0.03125832, 4.3697337e-10, -0.030423183, 0.99904823)
+bones/39/rotation = Quaternion(0.061905697, -4.671012e-10, -0.048202906, 0.9969173)
+bones/39/scale = Vector3(1, 0.9999999, 1)
+bones/40/rotation = Quaternion(0.09631453, 4.222425e-09, -0.07467031, 0.99254614)
+bones/40/scale = Vector3(0.9999994, 0.99999976, 1)
+bones/41/rotation = Quaternion(0.04824728, -1.2246452e-09, -0.037404954, 0.9981348)
+bones/42/rotation = Quaternion(0.11523957, 0.08389179, -0.062593564, 0.9878077)
+bones/42/scale = Vector3(0.9999998, 0.9999993, 0.9999997)
+bones/43/rotation = Quaternion(0.15479454, -9.442727e-10, -0.05726566, 0.9862856)
+bones/43/scale = Vector3(1, 0.99999964, 1)
+bones/44/rotation = Quaternion(0.08989164, -1.1695376e-09, -0.033255104, 0.9953962)
+bones/44/scale = Vector3(1, 0.9999997, 1)
+bones/45/rotation = Quaternion(0.098977275, 0.036497407, -0.06475018, 0.99230987)
+bones/45/scale = Vector3(1, 1, 0.9999996)
+bones/46/rotation = Quaternion(0.12778942, 9.41666e-10, -0.07427976, 0.9890159)
+bones/47/rotation = Quaternion(0.06783226, -1.5180789e-09, -0.039428685, 0.9969173)
+bones/47/scale = Vector3(1, 0.99999976, 1)
+bones/48/rotation = Quaternion(-0.22555701, -0.67001903, -0.23628092, 0.6666107)
+bones/48/scale = Vector3(0.9999998, 0.99939233, 0.9993921)
+bones/49/rotation = Quaternion(-0.05540681, 7.581137e-10, -0.025632348, 0.9981348)
+bones/49/scale = Vector3(0.9999993, 0.9999993, 1)
+bones/50/rotation = Quaternion(-0.031674266, 2.7665492e-10, -0.0146531835, 0.99939084)
+bones/50/scale = Vector3(0.9999993, 1, 1)
+bones/51/rotation = Quaternion(0.13073598, 0.021277862, -0.13164775, 0.9824074)
+bones/51/scale = Vector3(1, 1, 0.99999994)
+bones/52/rotation = Quaternion(0.044526763, -0.14275596, -0.083083734, 0.98525894)
+bones/52/scale = Vector3(0.99999994, 1, 0.99999994)
+bones/53/rotation = Quaternion(0.11006491, 0.043444652, 0.9902156, 0.073968716)
+bones/53/scale = Vector3(0.9999999, 0.99999994, 0.9999989)
+bones/54/rotation = Quaternion(-0.021814797, 0, 0, 0.99976206)
 
 [node name="Avatar" parent="ManualCarryBlock/IK_character/Skeleton3D" index="0" unique_id=670283819]
 visible = true
@@ -162,7 +274,7 @@ preview_time_seconds = 44.99999999999962
 
 [node name="CarrierWalkPlane" type="Marker3D" parent="." unique_id=880726852]
 editor_description = "Walkable plane used by the carrier trajectory. Its local Y axis is the plane normal. Move/rotate this marker to match the street, or assign carrier_walk_plane_path to another level Node3D."
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.049786806, -1.5349922)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.15803373, -1.5349922)
 gizmo_extents = 0.35
 
 [node name="CarrierTrajectory" type="Node3D" parent="." unique_id=158929959]
@@ -170,37 +282,86 @@ editor_description = "Editable carrier route. Drag the ordered Waypoint markers 
 metadata/walk_trajectory = true
 
 [node name="Waypoint_00" type="Marker3D" parent="CarrierTrajectory" unique_id=377402963]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.9002032, 0, -2.8123534)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.6376042, 0, -2.3634903)
 gizmo_extents = 0.24
 metadata/trajectory_waypoint = true
 
 [node name="Waypoint_01" type="Marker3D" parent="CarrierTrajectory" unique_id=1986672554]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.11420369, -0.14148176, -2.4863553)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.2359314, 0, 2.813075)
 gizmo_extents = 0.24
 metadata/trajectory_waypoint = true
 
 [node name="Waypoint_02" type="Marker3D" parent="CarrierTrajectory" unique_id=1657839255]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.0100777, -0.17191839, -3.4612758)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.2283099, -0.141482, -3.063946)
 gizmo_extents = 0.24
 metadata/trajectory_waypoint = true
 
 [node name="Waypoint_03" type="Marker3D" parent="CarrierTrajectory" unique_id=1771012918]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.433672, 0, -6.9360294)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.851917, -0.171918, -2.532421)
 gizmo_extents = 0.24
 metadata/trajectory_waypoint = true
+
+[node name="Waypoint_04" type="Marker3D" parent="CarrierTrajectory" unique_id=13713370]
+editor_description = "WAYPOINT: drag this marker to change the path position."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.766531, 0, -0.6505817)
+gizmo_extents = 0.24
+metadata/trajectory_waypoint = true
+
+[node name="InHandle" type="Marker3D" parent="CarrierTrajectory/Waypoint_04" unique_id=719405273]
+editor_description = "IN HANDLE: relative vector controlling how the curve arrives at this waypoint."
+gizmo_extents = 0.13
+
+[node name="OutHandle" type="Marker3D" parent="CarrierTrajectory/Waypoint_04" unique_id=282616363]
+editor_description = "OUT HANDLE: relative vector controlling how the curve leaves this waypoint."
+gizmo_extents = 0.13
+
+[node name="Waypoint_05" type="Marker3D" parent="CarrierTrajectory" unique_id=527385966]
+editor_description = "WAYPOINT: drag this marker to change the path position."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3.2449095, 0.46692288, -0.29308337)
+gizmo_extents = 0.24
+metadata/trajectory_waypoint = true
+
+[node name="InHandle" type="Marker3D" parent="CarrierTrajectory/Waypoint_05" unique_id=862363760]
+editor_description = "IN HANDLE: relative vector controlling how the curve arrives at this waypoint."
+gizmo_extents = 0.13
+
+[node name="OutHandle" type="Marker3D" parent="CarrierTrajectory/Waypoint_05" unique_id=189384555]
+editor_description = "OUT HANDLE: relative vector controlling how the curve leaves this waypoint."
+gizmo_extents = 0.13
+
+[node name="Waypoint_06" type="Marker3D" parent="CarrierTrajectory" unique_id=2036555025]
+editor_description = "WAYPOINT: drag this marker to change the path position."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.917787, 0.4023838, -0.32153237)
+gizmo_extents = 0.24
+metadata/trajectory_waypoint = true
+
+[node name="InHandle" type="Marker3D" parent="CarrierTrajectory/Waypoint_06" unique_id=1209718253]
+editor_description = "IN HANDLE: relative vector controlling how the curve arrives at this waypoint."
+gizmo_extents = 0.13
+
+[node name="OutHandle" type="Marker3D" parent="CarrierTrajectory/Waypoint_06" unique_id=877512683]
+editor_description = "OUT HANDLE: relative vector controlling how the curve leaves this waypoint."
+gizmo_extents = 0.13
+
+[node name="RootMotionSampler" type="Node3D" parent="." unique_id=1806529477]
+editor_description = "Neutral root-motion channel. Travelling gait clips animate this sampler; OTSCarryClayProxy consumes its distance and maps it onto CarrierTrajectory without moving Skeleton3D:Root twice."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.017540328, 0, 0.21081609)
 
 [node name="OTSCarryAnimationPlayer" type="AnimationPlayer" parent="." unique_id=177907639]
 editor_description = "Infinite male-only OTS gait cycle sourced from 1.24 s through the end of the usable capture. Accumulated source yaw is removed, the wrap seam is quaternion-blended, and trajectory nodes own world translation and heading."
 libraries/ = ExtResource("4_carry_motion")
 libraries/h3_heavy_load_hybrid = ExtResource("8_h3_heavy_load_hybrid")
+libraries/h3_heavy_load_hybrid_smooth = ExtResource("10_h3_heavy_load_hybrid_smooth")
+libraries/mixamo_walking_male_godot_direct = ExtResource("16_mixamo_walking_male_godot_direct")
 autoplay = &"ots_carry_walk_cycle"
+speed_scale = 1.0838896
 
 [node name="CoffeeBarStreet_Clay_Proxy" parent="." unique_id=734748128 instance=ExtResource("3_8ijel")]
 editor_description = "Monochrome CoffeeBarStreet clay proxy for this shot; Jeep geometry remains intentionally omitted. The Beijing EV bus is a separate sibling proxy below."
 
 [node name="BeijingEVBus_Clay_Proxy" parent="." unique_id=1122082281 instance=ExtResource("5_bus_proxy")]
 editor_description = "Editable monochrome Beijing EV bus blocking proxy generated from the supplied street reference. Rear axle intentionally sits close to the tail, matching the original high-wheelbase passenger-bus design; no condenser/radiator block is added."
-transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 18.543211, 0, 5.2489877)
+transform = Transform3D(0.99996966, 0, 0.007800989, 0, 1, 0, -0.007800989, 0, 0.99996966, 5.337485, 0, -0.28945494)
 metadata/source_reference_image = "/Users/hotcat/zhouyu/mathexam/grandcherokee/微信图片_20260928171157_216_5.jpg"
 metadata/identity_sheet = "/Users/hotcat/zhouyu/mathexam/grandcherokee/beijing_ev_bus_identity_sheet_gpt_image_2.png"
 metadata/reference_length_meters = 7.0
@@ -226,23 +387,27 @@ editor_description = "Carried abdomen/ribcage contact against the shoulder."
 gizmo_extents = 0.12
 
 [node name="FemalePelvisContact" type="Marker3D" parent="CarryInteractionAnchors" unique_id=1276026903]
+physics_interpolation_mode = 2
 editor_description = "Carried pelvis support reference."
-transform = Transform3D(-0.09281254, -0.4880463, -0.8678056, -0.19482125, 0.86361134, -0.46485835, 0.97640216, 0.12592548, -0.17524232, -3.8305097, 1.6231002, -2.5484438)
+transform = Transform3D(-0.19590041, -0.49905875, 0.84410137, 0.7170019, -0.6601474, -0.2238947, 0.6689539, 0.56136155, 0.4871484, 2.3346517, 1.5781734, -2.6020024)
 gizmo_extents = 0.12
 
 [node name="FemaleThighContact" type="Marker3D" parent="CarryInteractionAnchors" unique_id=1226625821]
+physics_interpolation_mode = 2
 editor_description = "Carried thigh contact for the supporting hand."
-transform = Transform3D(-0.20911981, 0.4711444, -0.8568441, 0.24504834, -0.822998, -0.51234674, -0.9466504, -0.31712943, 0.056665093, -3.8278356, 1.594671, -2.446332)
+transform = Transform3D(0.083997965, -0.99621433, -0.021078795, -0.35019255, -0.0097106695, -0.93663526, 0.93288016, 0.086054444, -0.34966996, 2.3255188, 1.3901982, -2.157903)
 gizmo_extents = 0.12
 
 [node name="MaleRightArmPole" type="Marker3D" parent="CarryInteractionAnchors" unique_id=1259848345]
+physics_interpolation_mode = 2
 editor_description = "Pole direction for the carrier's right arm hip-contact IK."
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.25, 1.1, -0.6)
+transform = Transform3D(-0.040855765, -0.9207555, 0.3879955, 0.5864715, 0.2922905, 0.75539255, -0.80893904, 0.2584105, 0.52805495, 2.3061001, 1.5812272, -2.692151)
 gizmo_extents = 0.1
 
 [node name="MaleLeftArmPole" type="Marker3D" parent="CarryInteractionAnchors" unique_id=1311940250]
+physics_interpolation_mode = 2
 editor_description = "Pole direction for the carrier's left arm thigh-contact IK."
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.25, 1.1, -0.6)
+transform = Transform3D(-0.44330585, -0.6895466, -0.5727173, -0.87853146, 0.46106675, 0.12489802, 0.17793787, 0.5585184, -0.81018233, 2.714872, 1.481037, -2.026466)
 gizmo_extents = 0.1
 
 [node name="GaitRoot" type="Marker3D" parent="CarryInteractionAnchors" unique_id=195065938]

@@ -28,6 +28,7 @@ const MAX_REASONABLE_PELVIS_OFFSET_METERS := 1.50
 @export var carrier_face_trajectory := true
 @export var ots_carry_animation_player_path: NodePath = NodePath("OTSCarryAnimationPlayer")
 @export var ots_carry_walk_animation: StringName = &"ots_carry_walk_cycle"
+
 ## Rounds waypoint corners without changing the authored marker positions.
 ## 0 keeps the original straight polyline; 1 gives the largest practical
 ## Catmull-Rom corner radius while remaining inside the neighboring spans.
@@ -43,6 +44,14 @@ const MAX_REASONABLE_PELVIS_OFFSET_METERS := 1.50
 ## from trajectory_corner_smoothing: it filters orientation without changing
 ## the authored path or the carrier's translation.
 @export_range(0.0, 1.0, 0.01, "suffix:s") var trajectory_heading_smoothing_seconds := 0.12
+## A loaded carrier should not spin around a planted foot merely because the
+## route tangent changes quickly. This cap turns sharp spline curvature into a
+## broad, physically readable change of heading.
+@export_range(10.0, 180.0, 1.0, "degrees") var trajectory_max_yaw_rate_degrees := 65.0
+## Reduce requested speed as route curvature rises. Root-motion clips keep
+## their gait/translation synchronized because their playback rate is reduced
+## by the same factor.
+@export_range(0.0, 0.75, 0.01) var trajectory_turn_speed_reduction := 0.35
 # This MakeHuman carrier faces local +Z. Using Godot's conventional -Z here
 # turns the mesh 180 degrees and makes a correct forward gait travel backward.
 @export var carrier_local_forward := Vector3(0.0, 0.0, 1.0)
@@ -51,8 +60,31 @@ const MAX_REASONABLE_PELVIS_OFFSET_METERS := 1.50
 @export var carrier_left_foot_bone: StringName = &"LeftFoot"
 @export var carrier_right_foot_bone: StringName = &"RightFoot"
 @export_range(0.001, 0.25, 0.001, "suffix:m") var carrier_contact_height := 0.08
+## Maximum local vertical foot velocity still considered planted. Horizontal
+## local motion is ignored because the root-motion stride naturally moves it.
 @export_range(0.01, 3.0, 0.01, "suffix:m/s") var carrier_contact_speed := 0.35
 @export_range(0.0, 1.0, 0.01) var carrier_foot_lock_strength := 0.85
+@export_range(0.0, 1.0, 0.01) var carrier_foot_lock_planar_strength := 0.72
+## Correct the carrier root along the walk-plane normal while a foot is
+## planted. Root-motion clips can have a few centimetres of authored ankle
+## clearance; horizontal locking alone then makes the character look as if he
+## is wading or floating above the floor.
+@export_range(0.0, 1.0, 0.01) var carrier_foot_lock_vertical_strength := 0.45
+@export_range(0.01, 0.5, 0.01, "suffix:m") var carrier_foot_lock_max_planar_offset := 0.18
+@export_range(0.01, 0.25, 0.01, "suffix:m") var carrier_foot_lock_max_vertical_offset := 0.08
+@export_range(0.01, 1.0, 0.01, "suffix:s") var carrier_foot_lock_release_seconds := 0.16
+@export_category("Carrier Root Motion")
+## Travelling clips are consumed rather than applied to Skeleton3D:Root. Their
+## displacement advances CarrierTrajectory, while the route still determines
+## the authored street position and direction.
+@export var carrier_root_motion_enabled := true
+@export var carrier_root_motion_sampler_path: NodePath = NodePath("RootMotionSampler")
+## Spatially shorten the normal-speed Mixamo stride for a person carrying a
+## heavy passenger. Playback rate is then derived so feet and route speed stay
+## synchronized instead of merely slowing one side of the system.
+@export_range(0.4, 1.25, 0.01) var carrier_root_motion_stride_scale := 0.65
+@export_range(0.2, 2.0, 0.01) var carrier_root_motion_min_playback_rate := 0.35
+@export_range(0.2, 2.0, 0.01) var carrier_root_motion_max_playback_rate := 1.25
 @export_tool_button("Restart carrier at trajectory start")
 var restart_trajectory_action: Callable = restart_carrier_trajectory
 @export_tool_button("Project trajectory markers onto walk plane")
@@ -112,6 +144,10 @@ var calibrate_attachment_action: Callable = calibrate_female_pelvis_attachment
 @export_range(0.0, 30.0, 0.1, "degrees") var head_sway_degrees := 5.0
 @export_range(0.0, 30.0, 0.1, "degrees") var head_nod_degrees := 3.0
 @export_range(0.0, 30.0, 0.1, "degrees") var torso_bob_degrees := 2.0
+## Roll the carried woman's spine slightly around local Z with the carrier's
+## alternating foot rhythm. This independent channel gives the torso a soft
+## side-to-side load response without changing pelvis attachment or hand IK.
+@export_range(0.0, 30.0, 0.1, "degrees") var spine_sway_degrees := 3.5
 @export var leg_swing_axis := Vector3(1.0, 0.0, 0.0)
 @export var knee_dangle_axis := Vector3(1.0, 0.0, 0.0)
 @export var foot_dangle_axis := Vector3(1.0, 0.0, 0.0)
@@ -119,6 +155,7 @@ var calibrate_attachment_action: Callable = calibrate_female_pelvis_attachment
 @export var forearm_dangle_axis := Vector3(0.0, 0.0, 1.0)
 @export var head_sway_axis := Vector3(0.0, 1.0, 0.0)
 @export var head_nod_axis := Vector3(1.0, 0.0, 0.0)
+@export var spine_sway_axis := Vector3(0.0, 0.0, 1.0)
 @export_tool_button("Capture current female pose as dangle baseline")
 var capture_dangle_baseline_action: Callable = capture_female_secondary_baseline
 
@@ -127,11 +164,28 @@ var capture_dangle_baseline_action: Callable = capture_female_secondary_baseline
 @export_range(0.0, 1.0, 0.01) var right_hand_contact_influence := 1.0
 @export_range(0.0, 1.0, 0.01) var left_hand_contact_influence := 1.0
 @export var update_female_contact_markers := true
-@export var carried_thigh_bone: StringName = &"LeftUpperLeg"
+## Which leg of the carried female supplies the hand-contact reference. An
+## explicit enum keeps this editable in Godot's Inspector; plain StringName
+## values can otherwise appear as a read-only `&"..."` token in some builds.
+@export_enum("LeftUpperLeg", "RightUpperLeg") var carried_thigh_bone: String = "LeftUpperLeg"
 @export var right_hand_contact_modifier: NodePath = NodePath("ManualCarryBlock/MaleCarrier/Skeleton3D/carry_right_arm_ik")
 @export var left_hand_contact_modifier: NodePath = NodePath("ManualCarryBlock/MaleCarrier/Skeleton3D/carry_left_arm_ik")
+@export var right_hand_contact_orientation_modifier: NodePath = NodePath("ManualCarryBlock/MaleCarrier/Skeleton3D/carry_right_hand_contact_copy")
+@export var left_hand_contact_orientation_modifier: NodePath = NodePath("ManualCarryBlock/MaleCarrier/Skeleton3D/carry_left_hand_contact_copy")
 @export_storage var female_pelvis_contact_offset := Transform3D.IDENTITY
 @export_storage var female_thigh_contact_offset := Transform3D.IDENTITY
+@export_storage var right_hand_contact_pole_offset := Transform3D.IDENTITY
+@export_storage var left_hand_contact_pole_offset := Transform3D.IDENTITY
+@export_storage var right_hand_contact_pole_captured := false
+@export_storage var left_hand_contact_pole_captured := false
+@export var right_hand_contact_orientation_enabled := true
+@export var left_hand_contact_orientation_enabled := true
+@export_tool_button("Capture right hand contact from current pose")
+var capture_right_hand_contact_action: Callable = capture_right_hand_contact_from_current_pose
+@export_tool_button("Calibrate thigh contact to current marker")
+var calibrate_thigh_contact_action: Callable = calibrate_female_thigh_contact
+@export_tool_button("Capture left hand contact from current pose")
+var capture_left_hand_contact_action: Callable = capture_left_hand_contact_from_current_pose
 
 var _attachment_updating := false
 var _editor_preview_baseline := Transform3D.IDENTITY
@@ -160,8 +214,15 @@ var _trajectory_points: Array[Vector3] = []
 var _trajectory_cumulative := PackedFloat32Array()
 var _trajectory_marker_signature := ""
 var _carrier_previous_feet := {"left": Vector3.ZERO, "right": Vector3.ZERO}
+var _carrier_previous_feet_local := {"left": Vector3.ZERO, "right": Vector3.ZERO}
 var _carrier_foot_anchors := {"left": Vector3.ZERO, "right": Vector3.ZERO}
 var _carrier_foot_was_contact := {"left": false, "right": false}
+var _carrier_foot_lock_offset := Vector3.ZERO
+var _carrier_foot_lock_height_offset := 0.0
+var _root_motion_previous_position := Vector3.ZERO
+var _root_motion_previous_time := 0.0
+var _root_motion_previous_animation := StringName()
+var _root_motion_initialized := false
 ## OTS Render Capture calls this fixed-step contract while encoding a video.
 ## Keeping the AnimationPlayer paused between explicit steps prevents a slow
 ## JPEG/FFmpeg frame from advancing the gait by wall-clock time.
@@ -169,6 +230,7 @@ var _capture_fixed_step_active := false
 var _capture_player_was_playing := false
 var _capture_player_animation := StringName()
 var _capture_player_position := 0.0
+var _capture_stationary := false
 
 func _ready() -> void:
 	# AnimationPlayer evaluates at the default priority. Run the contact solve
@@ -180,6 +242,9 @@ func _ready() -> void:
 	_normalize_female_root_scale()
 	_rebuild_carrier_trajectory()
 	_capture_secondary_baseline_if_needed()
+	_configure_hand_contact_evaluation_order()
+	_auto_capture_pelvis_contact_offset_if_missing()
+	_auto_capture_thigh_contact_offset_if_missing()
 	_configure_hand_contact_ik()
 	# Do not sample or rewrite the authored mounting offset while the editor is
 	# still instantiating inherited scenes and evaluating Skeleton3D modifiers.
@@ -194,12 +259,83 @@ func _ready() -> void:
 	if not Engine.is_editor_hint():
 		call_deferred("_apply_female_pelvis_attachment", 0.0)
 
+func _configure_hand_contact_evaluation_order() -> void:
+	"""Evaluate contact targets before the carrier's SkeletonModifier3D stack.
+
+		The controller intentionally runs after AnimationPlayer so the female
+		attachment and secondary motion see the current animated pose. The male
+		skeleton must then run one priority step later; otherwise TwoBoneIK3D
+		reads the previous frame's thigh marker and visibly trails during a walk.
+		Contact markers also opt out of physics interpolation because both the IK
+		and CopyTransform modifiers request interpolated target transforms.
+	"""
+	var male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
+	if male_skeleton != null:
+		male_skeleton.process_priority = process_priority + 1
+	var anchors := get_node_or_null("CarryInteractionAnchors") as Node3D
+	if anchors == null:
+		return
+	for marker_name in [
+		"FemalePelvisContact",
+		"FemaleThighContact",
+		"MaleRightArmPole",
+		"MaleLeftArmPole",
+	]:
+		var marker := anchors.get_node_or_null(marker_name) as Marker3D
+		if marker != null:
+			marker.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+
+func _auto_capture_thigh_contact_offset_if_missing() -> void:
+	"""Preserve a manually authored marker when no offset was serialized.
+
+		Older versions exposed FemaleThighContact as a free marker but did not
+		persist the derived offset. Without this bootstrap, enabling marker
+	updates would immediately snap that marker to the thigh-bone origin. Only
+	identity offsets are bootstrapped, so an explicit calibration is never
+	 overwritten.
+	"""
+	if not update_female_contact_markers or not female_thigh_contact_offset.is_equal_approx(Transform3D.IDENTITY):
+		return
+	var female_skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	var marker := get_node_or_null("CarryInteractionAnchors/FemaleThighContact") as Marker3D
+	if female_skeleton == null or marker == null:
+		return
+	var thigh_index := female_skeleton.find_bone(carried_thigh_bone)
+	if thigh_index < 0:
+		return
+	var thigh_global := female_skeleton.global_transform * female_skeleton.get_bone_global_pose(thigh_index)
+	if not thigh_global.is_equal_approx(marker.global_transform):
+		female_thigh_contact_offset = thigh_global.affine_inverse() * marker.global_transform
+		if Engine.is_editor_hint():
+			EditorInterface.mark_scene_as_unsaved()
+
+func _auto_capture_pelvis_contact_offset_if_missing() -> void:
+	"""Preserve a manually authored pelvis contact when no offset is stored."""
+	if not update_female_contact_markers or not female_pelvis_contact_offset.is_equal_approx(Transform3D.IDENTITY):
+		return
+	var female_skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	var marker := get_node_or_null("CarryInteractionAnchors/FemalePelvisContact") as Marker3D
+	if female_skeleton == null or marker == null:
+		return
+	var pelvis_index := female_skeleton.find_bone(carried_pelvis_bone)
+	if pelvis_index < 0:
+		return
+	var pelvis_global := female_skeleton.global_transform * female_skeleton.get_bone_global_pose(pelvis_index)
+	if not pelvis_global.is_equal_approx(marker.global_transform):
+		female_pelvis_contact_offset = pelvis_global.affine_inverse() * marker.global_transform
+		if Engine.is_editor_hint():
+			EditorInterface.mark_scene_as_unsaved()
+
 func _process(_delta: float) -> void:
 	if Engine.is_editor_hint():
 		_apply_carry_shot_visibility()
 	if _capture_fixed_step_active:
 		return
 	_apply_carrier_trajectory(_delta)
+	# AnimationPlayer has evaluated the keyed leg pose before this controller
+	# runs. Force the Skeleton3D transforms so the secondary solver samples the
+	# current root-motion frame rather than the previous frame.
+	_refresh_male_pose_for_sampling()
 	_apply_female_pelvis_attachment(_delta)
 	_apply_secondary_motion(_delta)
 	_update_female_contact_markers()
@@ -209,8 +345,13 @@ func _process(_delta: float) -> void:
 ## Fixed-step editor video hooks.  These mirror FemaleWalkController's hooks
 ## but advance the OTS AnimationPlayer and its procedural attachment layers as
 ## one deterministic unit per encoded frame.
-func editor_capture_begin_fixed_step() -> Dictionary:
+func editor_capture_begin_fixed_step(options: Dictionary = {}) -> Dictionary:
 	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher != null and matcher.has_method("editor_capture_begin_fixed_step"):
+		matcher.call("editor_capture_begin_fixed_step")
+	var requested_source := str(options.get("motion_source", "walk_cycle")).to_lower().replace("-", "_")
+	_capture_stationary = requested_source in ["stationary", "still", "static"]
 	_capture_fixed_step_active = true
 	_capture_player_was_playing = player != null and player.is_playing()
 	_capture_player_animation = player.current_animation if player != null else StringName()
@@ -222,6 +363,7 @@ func editor_capture_begin_fixed_step() -> Dictionary:
 	return {
 		"ok": true,
 		"was_playing": _capture_player_was_playing,
+		"motion_source": "stationary" if _capture_stationary else "walk_cycle",
 		"animation": str(_capture_player_animation),
 		"animation_time_seconds": player.current_animation_position if player != null else 0.0,
 	}
@@ -232,22 +374,64 @@ func editor_capture_step_fixed(delta_seconds: float) -> Dictionary:
 	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
 	if not _capture_fixed_step_active:
 		return {"ok": false, "error": "ots_capture_fixed_step_not_active"}
+	# A stationary take is an exact hold of the editor's current OTS block. The
+	# autoplay AnimationPlayer has already been paused by begin_fixed_step; do
+	# not advance the route, attachment lag, secondary motion, or hand targets.
+	# Camera-program time is owned by OTS Render Capture and still advances.
+	if _capture_stationary:
+		return {
+			"ok": true,
+			"motion_source": "stationary",
+			"animation_time_seconds": player.current_animation_position if player != null else 0.0,
+		}
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher != null and matcher.has_method("editor_capture_step_fixed"):
+		matcher.call("editor_capture_step_fixed", step)
+		# The matcher may have selected a different source clip at this frame.
+		# Keep the deterministic capture clock pointed at that clip instead of
+		# seeking the animation that was active when recording began.
+		# A paused AnimationPlayer may transiently expose an empty
+		# current_animation. Never replace the deterministic capture clip with
+		# that empty value; only accept a real animation selected by the matcher.
+		if player != null and not player.current_animation.is_empty() and player.current_animation != _capture_player_animation:
+			_capture_player_animation = player.current_animation
+			_capture_player_position = player.current_animation_position
 	if player != null and _capture_player_was_playing and step > 0.0:
 		# Seek the paused player explicitly.  AnimationPlayer.advance() depends
 		# on its playback state in some Godot editor builds; seek(..., true) is
 		# deterministic while still evaluating every keyed bone at this frame.
 		var animation := player.get_animation(_capture_player_animation)
-		_capture_player_position += step
+		_capture_player_position += step * maxf(player.speed_scale, 0.0)
 		if animation != null and animation.loop_mode != 0 and animation.length > 0.0001:
 			_capture_player_position = fposmod(_capture_player_position, animation.length)
 		elif animation != null:
 			_capture_player_position = minf(_capture_player_position, animation.length)
 		player.seek(_capture_player_position, true)
+	# AnimationPlayer.seek evaluates keyed properties, but Godot may defer the
+	# Skeleton3D pose/modifier update until the next idle tick. Refresh before
+	# sampling foot rhythm so captured secondary motion follows this exact frame,
+	# not the previous one.
+	var sampled_male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
+	if sampled_male_skeleton != null:
+		sampled_male_skeleton.advance(step)
+		sampled_male_skeleton.force_update_all_bone_transforms()
 	_apply_carrier_trajectory(step)
 	_apply_female_pelvis_attachment(step)
 	_apply_secondary_motion(step)
 	_update_female_contact_markers()
 	_configure_hand_contact_ik()
+	# During OTS video capture this controller owns the clock and normal
+	# Node3D._process() callbacks are intentionally paused. Explicitly run the
+	# male Skeleton3D modifier stack here so the contact IK is present in the
+	# very frame that OTS Render copies, rather than only appearing in the next
+	# editor preview frame.
+	var male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
+	if male_skeleton != null:
+		# A zero delta can be treated as a no-op by Godot 4.7's modifier stack.
+		# Pass the capture step so TwoBoneIK3D and CopyTransformModifier3D are
+		# guaranteed to evaluate for this output frame.
+		male_skeleton.advance(step)
+		male_skeleton.force_update_all_bone_transforms()
 	return {
 		"ok": true,
 		"animation_time_seconds": player.current_animation_position if player != null else 0.0,
@@ -256,9 +440,13 @@ func editor_capture_step_fixed(delta_seconds: float) -> Dictionary:
 
 func editor_capture_end_fixed_step(was_playing: bool = false) -> Dictionary:
 	var player := get_node_or_null(ots_carry_animation_player_path) as AnimationPlayer
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher != null and matcher.has_method("editor_capture_end_fixed_step"):
+		matcher.call("editor_capture_end_fixed_step")
 	var should_resume := _capture_player_was_playing or was_playing
 	_capture_fixed_step_active = false
 	_capture_player_was_playing = false
+	_capture_stationary = false
 	if should_resume and player != null and not _capture_player_animation.is_empty():
 		player.play(_capture_player_animation)
 		player.seek(_capture_player_position, true)
@@ -272,6 +460,7 @@ func restart_carrier_trajectory() -> void:
 	_trajectory_progress = 0.0
 	_reset_carrier_foot_lock()
 	_reset_carrier_heading_filter()
+	_reset_root_motion_consumer()
 	_reset_secondary_rhythm()
 	_reset_pelvis_follow_filter()
 	_rebuild_carrier_trajectory()
@@ -293,6 +482,65 @@ func get_camera_follow_transform() -> Transform3D:
 	var carrier := get_node_or_null(carrier_root_path) as Node3D
 	return carrier.global_transform if carrier != null else global_transform
 
+func get_motion_matching_query() -> Dictionary:
+	"""Return the route-owned request used by OTSMotionMatchingController.
+
+		Motion matching must not infer heading from the animated pelvis: the
+		pelvis deliberately contains gait bob and loaded-carry sway.  This query
+		uses the predefined CarrierTrajectory instead, so changing clips cannot
+		make the carrier turn or drift away from the authored path.
+	"""
+	var speed := maxf(carrier_walk_speed_mps, 0.0)
+	var turn_amount := 0.0
+	var route_length := float(_trajectory_cumulative[-1]) if not _trajectory_cumulative.is_empty() else 0.0
+	if route_length > 0.0001 and _trajectory_points.size() >= 2:
+		var lookahead := clampf(maxf(speed * 0.35, 0.12), 0.05, route_length * 0.2)
+		var before := _sample_route_tangent(maxf(_trajectory_progress - lookahead, 0.0))
+		var after := _sample_route_tangent(minf(_trajectory_progress + lookahead, route_length))
+		if before.length_squared() > 0.0001 and after.length_squared() > 0.0001:
+			turn_amount = clampf(absf(atan2(before.cross(after).dot(_walk_plane_normal()), before.dot(after))) / PI, 0.0, 1.0)
+	return {
+		"speed": speed,
+		"turn": turn_amount,
+		"progress": _trajectory_progress,
+		"route_length": route_length,
+	}
+
+func editor_transport_enable_motion_matching(enabled: bool = true) -> Dictionary:
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher == null or not matcher.has_method("enable_motion_matching"):
+		return {"ok": false, "error": "motion_matching_controller_not_found"}
+	return matcher.call("enable_motion_matching") if enabled else matcher.call("disable_motion_matching")
+
+func editor_transport_play_motion_matching(restart: bool = true) -> Dictionary:
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher == null or not matcher.has_method("start_motion_matching"):
+		return {"ok": false, "error": "motion_matching_controller_not_found"}
+	return matcher.call("start_motion_matching", restart)
+
+func editor_transport_motion_matching_status() -> Dictionary:
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher == null or not matcher.has_method("status"):
+		return {"ok": false, "error": "motion_matching_controller_not_found"}
+	return matcher.call("status")
+
+func editor_transport_configure_motion_matching(options: Dictionary = {}) -> Dictionary:
+	var matcher := get_node_or_null("OTSMotionMatching")
+	if matcher == null or not matcher.has_method("status"):
+		return {"ok": false, "error": "motion_matching_controller_not_found"}
+	if options.has("desired_load"):
+		matcher.set("desired_load", clampf(float(options.get("desired_load")), 0.0, 1.0))
+	if options.has("desired_speed_mps"):
+		matcher.set("desired_speed_mps", maxf(float(options.get("desired_speed_mps")), 0.1))
+	if options.has("matching_interval_seconds"):
+		matcher.set("matching_interval_seconds", maxf(float(options.get("matching_interval_seconds")), 0.05))
+	if options.has("blend_seconds"):
+		matcher.set("blend_seconds", clampf(float(options.get("blend_seconds")), 0.0, 1.0))
+	matcher.set("_matching_elapsed", matcher.get("matching_interval_seconds"))
+	if bool(options.get("select_now", true)) and bool(matcher.get("enabled")):
+		matcher.call("select_best_gait")
+	return matcher.call("status")
+
 
 func editor_transport_play_ots_carry(animation_name: String = "", restart: bool = true) -> Dictionary:
 	"""Play the OTS carrier AnimationPlayer from an editor transport command."""
@@ -309,6 +557,11 @@ func editor_transport_play_ots_carry(animation_name: String = "", restart: bool 
 		player.seek(0.0, true)
 	else:
 		player.play(requested)
+	# Prime a travelling clip before the first editor/capture frame. Without
+	# this, the first frame uses AnimationPlayer.speed_scale == 1.0 and consumes
+	# one full-speed root delta before the trajectory solver can derive the
+	# requested 0.78 m/s loaded-carrier pace.
+	_configure_root_motion_playback(player, carrier_walk_speed_mps)
 	return {
 		"ok": true,
 		"animation": str(requested),
@@ -372,7 +625,12 @@ func _apply_carrier_trajectory(delta: float) -> void:
 		_reset_carrier_foot_lock()
 		_reset_carrier_heading_filter()
 		_trajectory_was_active = true
-	_trajectory_progress += carrier_walk_speed_mps * maxf(delta, 0.0)
+	var turn_amount := _route_turn_amount()
+	var turn_speed_factor := 1.0 - trajectory_turn_speed_reduction * turn_amount
+	var desired_speed := carrier_walk_speed_mps * clampf(turn_speed_factor, 0.2, 1.0)
+	_configure_root_motion_playback(player, desired_speed)
+	var root_advance := _consume_root_motion_distance(player, delta)
+	_trajectory_progress += root_advance if root_advance >= 0.0 else desired_speed * maxf(delta, 0.0)
 	_trajectory_progress = fposmod(_trajectory_progress, length) if carrier_trajectory_loop else clampf(_trajectory_progress, 0.0, length)
 	_place_carrier_on_trajectory(carrier, _trajectory_progress, delta)
 	_apply_carrier_foot_lock(carrier, delta, length)
@@ -454,7 +712,7 @@ func _place_carrier_on_trajectory(carrier: Node3D, progress: float, delta: float
 	var sample := _sample_carrier_trajectory(progress)
 	if sample.is_empty():
 		return
-	carrier.global_position = _project_to_walk_plane(sample.position as Vector3, carrier_height_above_plane)
+	carrier.global_position = _project_to_walk_plane(sample.position as Vector3, carrier_height_above_plane) + _carrier_foot_lock_offset + _walk_plane_normal() * _carrier_foot_lock_height_offset
 	if not carrier_face_trajectory or not _carrier_baseline_initialized:
 		return
 	var normal := _walk_plane_normal()
@@ -468,6 +726,10 @@ func _place_carrier_on_trajectory(carrier: Node3D, progress: float, delta: float
 		elif update_heading:
 			var smoothing_seconds := maxf(trajectory_heading_smoothing_seconds, 0.0)
 			var alpha := 1.0 if smoothing_seconds <= 0.0001 else 1.0 - exp(-delta / smoothing_seconds)
+			var angle := _carrier_heading_rotation.angle_to(target_rotation)
+			if angle > 0.000001:
+				var max_step := deg_to_rad(trajectory_max_yaw_rate_degrees) * maxf(delta, 0.0)
+				alpha = minf(alpha, max_step / angle)
 			_carrier_heading_rotation = _carrier_heading_rotation.slerp(target_rotation, clampf(alpha, 0.0, 1.0)).normalized()
 		carrier.global_basis = Basis(_carrier_heading_rotation) * _carrier_initial_transform.basis
 
@@ -559,10 +821,22 @@ func _apply_carrier_foot_lock(carrier: Node3D, delta: float, trajectory_length: 
 	var contacts := {"left": false, "right": false}
 	for side in ["left", "right"]:
 		var foot := _carrier_foot_world(side)
-		var previous := _carrier_previous_feet[side] as Vector3
-		var speed := foot.distance_to(previous) / maxf(delta, 0.0001) if not previous.is_zero_approx() else INF
+		# Contact is measured relative to the animated carrier. The external
+		# root-motion route intentionally moves the whole carrier at walking
+		# speed; using world velocity here prevented a planted foot from ever
+		# acquiring an anchor.
+		var local_foot := carrier.global_transform.affine_inverse() * foot
+		var previous_local := _carrier_previous_feet_local[side] as Vector3
+		# Horizontal local motion is expected while the source clip translates
+		# its feet through a stride. Use only local vertical velocity to decide
+		# whether a near-plane foot is planted; otherwise a perfectly valid
+		# stance is rejected as soon as the carrier starts root motion.
+		var vertical_speed := absf(local_foot.y - previous_local.y) / maxf(delta, 0.0001) if not previous_local.is_zero_approx() else INF
 		var plane_distance := absf((foot - _project_to_walk_plane(foot, 0.0)).dot(_walk_plane_normal()))
-		var contact := plane_distance <= carrier_contact_height and speed <= carrier_contact_speed
+		# Once planted, retain contact until the foot actually lifts. The old
+		# speed-only test rejected the very frame that external root yaw swept a
+		# planted foot sideways, preventing the lock from correcting the slide.
+		var contact := plane_distance <= carrier_contact_height and (vertical_speed <= carrier_contact_speed or bool(_carrier_foot_was_contact[side]))
 		contacts[side] = contact
 		if contact and not bool(_carrier_foot_was_contact[side]):
 			_carrier_foot_anchors[side] = foot
@@ -574,12 +848,59 @@ func _apply_carrier_foot_lock(carrier: Node3D, delta: float, trajectory_length: 
 		if bool(contacts[side]) and bool(_carrier_foot_was_contact[side]):
 			correction_sum += ((_carrier_foot_anchors[side] as Vector3) - _carrier_foot_world(side)).dot(tangent)
 			correction_count += 1
-	if correction_count > 0 and tangent.length_squared() > 0.0001:
+	# A travelling clip already supplies the authoritative longitudinal
+	# displacement through RootMotionSampler. Do not apply a second tangential
+	# correction or the carrier will surge/backtrack at every foot plant.
+	if correction_count > 0 and tangent.length_squared() > 0.0001 and not _root_motion_initialized:
 		_trajectory_progress += correction_sum / float(correction_count) * carrier_foot_lock_strength
 		_trajectory_progress = fposmod(_trajectory_progress, trajectory_length) if carrier_trajectory_loop else clampf(_trajectory_progress, 0.0, trajectory_length)
 		_place_carrier_on_trajectory(carrier, _trajectory_progress, 0.0, false)
+	# Preserve the supporting foot in the full walk plane, not only along the
+	# path tangent. This absorbs the lateral arc generated when the route turns
+	# beneath a straight-walk source clip.
+	var planar_correction := Vector3.ZERO
+	var planar_count := 0
+	if not _root_motion_initialized:
+		for side in ["left", "right"]:
+			if bool(contacts[side]) and bool(_carrier_foot_was_contact[side]):
+				var correction := ((_carrier_foot_anchors[side] as Vector3) - _carrier_foot_world(side)).slide(_walk_plane_normal())
+				planar_correction += correction
+				planar_count += 1
+	var previous_offset := _carrier_foot_lock_offset
+	var previous_height_offset := _carrier_foot_lock_height_offset
+	if planar_count > 0:
+		_carrier_foot_lock_offset += planar_correction / float(planar_count) * carrier_foot_lock_planar_strength
+		if _carrier_foot_lock_offset.length() > carrier_foot_lock_max_planar_offset:
+			_carrier_foot_lock_offset = _carrier_foot_lock_offset.normalized() * carrier_foot_lock_max_planar_offset
+	else:
+		var release_alpha := 1.0 - exp(-maxf(delta, 0.0) / maxf(carrier_foot_lock_release_seconds, 0.0001))
+		_carrier_foot_lock_offset = _carrier_foot_lock_offset.lerp(Vector3.ZERO, release_alpha)
+	# Recalibrate height only when a new foot becomes planted. Continuously
+	# averaging the two animated ankle heights made the carrier bob up and down
+	# as one foot entered swing, which reads as floating in water.
+	var vertical_correction := 0.0
+	var vertical_count := 0
+	for side in ["left", "right"]:
+		if bool(contacts[side]) and not bool(_carrier_foot_was_contact[side]):
+			var foot := _carrier_foot_world(side)
+			var signed_height := (foot - _project_to_walk_plane(foot, 0.0)).dot(_walk_plane_normal())
+			vertical_correction += -signed_height
+			vertical_count += 1
+	if vertical_count > 0:
+		var target_height_offset := clampf(
+			_carrier_foot_lock_height_offset + vertical_correction / float(vertical_count),
+			-carrier_foot_lock_max_vertical_offset,
+			carrier_foot_lock_max_vertical_offset
+		)
+		_carrier_foot_lock_height_offset = lerpf(
+			_carrier_foot_lock_height_offset, target_height_offset,
+			carrier_foot_lock_vertical_strength)
+	carrier.global_position += _carrier_foot_lock_offset - previous_offset
+	carrier.global_position += _walk_plane_normal() * (
+		_carrier_foot_lock_height_offset - previous_height_offset)
 	for side in ["left", "right"]:
 		_carrier_previous_feet[side] = _carrier_foot_world(side)
+		_carrier_previous_feet_local[side] = carrier.global_transform.affine_inverse() * _carrier_previous_feet[side]
 		_carrier_foot_was_contact[side] = bool(contacts[side])
 
 func _carrier_foot_world(side: String) -> Vector3:
@@ -594,8 +915,125 @@ func _carrier_foot_world(side: String) -> Vector3:
 
 func _reset_carrier_foot_lock() -> void:
 	_carrier_previous_feet = {"left": Vector3.ZERO, "right": Vector3.ZERO}
+	_carrier_previous_feet_local = {"left": Vector3.ZERO, "right": Vector3.ZERO}
 	_carrier_foot_anchors = {"left": Vector3.ZERO, "right": Vector3.ZERO}
 	_carrier_foot_was_contact = {"left": false, "right": false}
+	_carrier_foot_lock_offset = Vector3.ZERO
+	_carrier_foot_lock_height_offset = 0.0
+
+func _refresh_male_pose_for_sampling() -> void:
+	var skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
+	if skeleton != null:
+		skeleton.force_update_all_bone_transforms()
+
+
+func _route_turn_amount() -> float:
+	var query := get_motion_matching_query()
+	return clampf(float(query.get("turn", 0.0)), 0.0, 1.0)
+
+func _effective_animation_name(player: AnimationPlayer) -> StringName:
+	if player == null:
+		return StringName()
+	if not player.current_animation.is_empty():
+		return player.current_animation
+	if _capture_fixed_step_active and not _capture_player_animation.is_empty():
+		return _capture_player_animation
+	return StringName()
+
+
+func _configure_root_motion_playback(player: AnimationPlayer, desired_speed: float) -> void:
+	var animation_name := _effective_animation_name(player)
+	if player == null or animation_name.is_empty():
+		return
+	var animation := player.get_animation(animation_name)
+	if animation == null or not carrier_root_motion_enabled:
+		return
+	var source_speed := float(animation.get_meta("ots_recommended_speed_mps", 0.0))
+	if source_speed <= 0.0001:
+		# Existing in-place clips retain their authored playback rate.
+		player.speed_scale = 1.0
+		return
+	var warped_speed := source_speed * _root_motion_stride_scale(animation)
+	player.speed_scale = clampf(
+		desired_speed / maxf(warped_speed, 0.0001),
+		carrier_root_motion_min_playback_rate,
+		carrier_root_motion_max_playback_rate
+	)
+
+
+func _consume_root_motion_distance(player: AnimationPlayer, delta: float) -> float:
+	"""Return path distance from the current travelling clip, or -1 if absent."""
+	var animation_name := _effective_animation_name(player)
+	if not carrier_root_motion_enabled or player == null or animation_name.is_empty():
+		_reset_root_motion_consumer()
+		return -1.0
+	var animation := player.get_animation(animation_name)
+	var sampler := get_node_or_null(carrier_root_motion_sampler_path) as Node3D
+	if animation == null or sampler == null:
+		_reset_root_motion_consumer()
+		return -1.0
+	var source_speed := float(animation.get_meta("ots_recommended_speed_mps", 0.0))
+	var stride_scale := _root_motion_stride_scale(animation)
+	var cycle_displacement_value: Variant = animation.get_meta("ots_root_cycle_displacement", Vector3.ZERO)
+	var cycle_displacement := cycle_displacement_value as Vector3 if cycle_displacement_value is Vector3 else Vector3.ZERO
+	if cycle_displacement.length_squared() <= 0.000001:
+		# Older extracted libraries may contain the sampler track but predate
+		# the displacement metadata. Derive it once from the keyed channel so
+		# those clips still drive CarrierTrajectory and secondary motion.
+		cycle_displacement = _root_cycle_displacement_from_track(animation)
+	var cycle_planar := cycle_displacement.slide(_walk_plane_normal())
+	if source_speed <= 0.0001 or cycle_planar.length_squared() <= 0.000001:
+		_reset_root_motion_consumer()
+		return -1.0
+	var current_position := sampler.position
+	current_position.y = 0.0
+	var current_time := player.current_animation_position
+	if not _root_motion_initialized or animation_name != _root_motion_previous_animation:
+		_root_motion_previous_position = current_position
+		_root_motion_previous_time = current_time
+		_root_motion_previous_animation = animation_name
+		_root_motion_initialized = true
+		return 0.0
+	var displacement := current_position - _root_motion_previous_position
+	if current_time + 0.00001 < _root_motion_previous_time:
+		displacement = (cycle_planar - _root_motion_previous_position) + current_position
+	_root_motion_previous_position = current_position
+	_root_motion_previous_time = current_time
+	var forward := cycle_planar.normalized()
+	var distance := maxf(0.0, displacement.dot(forward)) * stride_scale
+	# A malformed key or editor seek must never teleport the carrier. Normal
+	# playback stays far below this generous three-frame-speed envelope.
+	var max_distance := source_speed * stride_scale * maxf(delta, 1.0 / 120.0) * 3.0
+	return minf(distance, max_distance)
+
+func _root_cycle_displacement_from_track(animation: Animation) -> Vector3:
+	if animation == null:
+		return Vector3.ZERO
+	for track in animation.get_track_count():
+		if animation.track_get_type(track) != Animation.TYPE_POSITION_3D:
+			continue
+		if str(animation.track_get_path(track)) != "RootMotionSampler:position":
+			continue
+		var key_count := animation.track_get_key_count(track)
+		if key_count < 2:
+			return Vector3.ZERO
+		var first := animation.track_get_key_value(track, 0) as Vector3
+		var last := animation.track_get_key_value(track, key_count - 1) as Vector3
+		return last - first
+	return Vector3.ZERO
+
+
+func _root_motion_stride_scale(animation: Animation) -> float:
+	if animation != null and animation.has_meta("ots_root_motion_stride_scale"):
+		return clampf(float(animation.get_meta("ots_root_motion_stride_scale")), 0.1, 2.0)
+	return carrier_root_motion_stride_scale
+
+
+func _reset_root_motion_consumer() -> void:
+	_root_motion_previous_position = Vector3.ZERO
+	_root_motion_previous_time = 0.0
+	_root_motion_previous_animation = StringName()
+	_root_motion_initialized = false
 
 func calibrate_female_pelvis_attachment() -> void:
 	var transforms := _attachment_transforms()
@@ -616,6 +1054,99 @@ func calibrate_female_pelvis_attachment() -> void:
 		return
 	female_pelvis_in_shoulder = calibrated
 	_reset_pelvis_follow_filter()
+	if Engine.is_editor_hint():
+		EditorInterface.mark_scene_as_unsaved()
+
+func calibrate_female_thigh_contact() -> void:
+	"""Store the marker's current pose relative to the selected thigh bone.
+
+		When update_female_contact_markers is enabled, the marker is rebuilt from
+		this offset every frame. This button makes that workflow editable: turn
+		marker updates off, place FemaleThighContact on the desired point, press
+		this button, then turn marker updates back on for a walking shot.
+	"""
+	var female_skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	var marker := get_node_or_null("CarryInteractionAnchors/FemaleThighContact") as Marker3D
+	if female_skeleton == null or marker == null:
+		return
+	var thigh_index := female_skeleton.find_bone(carried_thigh_bone)
+	if thigh_index < 0:
+		push_warning("Cannot calibrate thigh contact: bone '%s' was not found on the female skeleton." % carried_thigh_bone)
+		return
+	var thigh_global := female_skeleton.global_transform * female_skeleton.get_bone_global_pose(thigh_index)
+	female_thigh_contact_offset = thigh_global.affine_inverse() * marker.global_transform
+	if Engine.is_editor_hint():
+		EditorInterface.mark_scene_as_unsaved()
+
+func capture_left_hand_contact_from_current_pose() -> void:
+	"""Capture the authored male left-hand contact as a reusable thigh offset.
+
+		Pose the carrier's left hand with IK disabled, including its palm
+		orientation. This action copies that transform to FemaleThighContact,
+		stores the offset relative to the selected female thigh bone, and records
+		the current elbow direction so the TwoBoneIK solve reproduces the pose.
+		Afterward, enable Hand Contact IK and the anchor will follow the female
+		through the walk without the hand twisting back to its old animation pose.
+	"""
+	var male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
+	var female_skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	var marker := get_node_or_null("CarryInteractionAnchors/FemaleThighContact") as Marker3D
+	var pole := get_node_or_null("CarryInteractionAnchors/MaleLeftArmPole") as Marker3D
+	if male_skeleton == null or female_skeleton == null or marker == null or pole == null:
+		return
+	var hand_index := male_skeleton.find_bone("LeftHand")
+	var elbow_index := male_skeleton.find_bone("LeftLowerArm")
+	var thigh_index := female_skeleton.find_bone(carried_thigh_bone)
+	if hand_index < 0 or elbow_index < 0 or thigh_index < 0:
+		push_warning("Cannot capture left hand contact: required hand, elbow, or thigh bone was not found.")
+		return
+	var hand_global := male_skeleton.global_transform * male_skeleton.get_bone_global_pose(hand_index)
+	var elbow_global := male_skeleton.global_transform * male_skeleton.get_bone_global_pose(elbow_index)
+	var thigh_global := female_skeleton.global_transform * female_skeleton.get_bone_global_pose(thigh_index)
+	marker.global_transform = hand_global
+	female_thigh_contact_offset = thigh_global.affine_inverse() * hand_global
+	# Keep the elbow on the same bend side when the carrier root moves. The
+	# stored offset is evaluated in carrier-root space by the marker updater.
+	var carrier := get_node_or_null(carrier_root_path) as Node3D
+	if carrier != null:
+		left_hand_contact_pole_offset = carrier.global_transform.affine_inverse() * elbow_global
+		left_hand_contact_pole_captured = true
+	else:
+		pole.global_transform = elbow_global
+	if Engine.is_editor_hint():
+		EditorInterface.mark_scene_as_unsaved()
+
+func capture_right_hand_contact_from_current_pose() -> void:
+	"""Capture the authored male right-hand hold as a pelvis-relative contact.
+
+		Pose the carrier's right hand on the female pelvis with hand IK disabled,
+		then press the Inspector button. The pelvis marker receives the hand's
+		position and orientation, while the right-arm pole preserves the authored
+		elbow bend when the carrier starts walking.
+	"""
+	var male_skeleton := get_node_or_null("ManualCarryBlock/MaleCarrier/Skeleton3D") as Skeleton3D
+	var female_skeleton := get_node_or_null("ManualCarryBlock/IK_character/Skeleton3D") as Skeleton3D
+	var marker := get_node_or_null("CarryInteractionAnchors/FemalePelvisContact") as Marker3D
+	var pole := get_node_or_null("CarryInteractionAnchors/MaleRightArmPole") as Marker3D
+	if male_skeleton == null or female_skeleton == null or marker == null or pole == null:
+		return
+	var hand_index := male_skeleton.find_bone("RightHand")
+	var elbow_index := male_skeleton.find_bone("RightLowerArm")
+	var pelvis_index := female_skeleton.find_bone(carried_pelvis_bone)
+	if hand_index < 0 or elbow_index < 0 or pelvis_index < 0:
+		push_warning("Cannot capture right hand contact: required hand, elbow, or pelvis bone was not found.")
+		return
+	var hand_global := male_skeleton.global_transform * male_skeleton.get_bone_global_pose(hand_index)
+	var elbow_global := male_skeleton.global_transform * male_skeleton.get_bone_global_pose(elbow_index)
+	var pelvis_global := female_skeleton.global_transform * female_skeleton.get_bone_global_pose(pelvis_index)
+	marker.global_transform = hand_global
+	female_pelvis_contact_offset = pelvis_global.affine_inverse() * hand_global
+	var carrier := get_node_or_null(carrier_root_path) as Node3D
+	if carrier != null:
+		right_hand_contact_pole_offset = carrier.global_transform.affine_inverse() * elbow_global
+		right_hand_contact_pole_captured = true
+	else:
+		pole.global_transform = elbow_global
 	if Engine.is_editor_hint():
 		EditorInterface.mark_scene_as_unsaved()
 
@@ -743,7 +1274,7 @@ func _apply_secondary_motion(delta: float) -> void:
 	_apply_bone_dangle(skeleton, &"RightLowerArm", forearm_dangle_axis, -right_swing * forearm_dangle_degrees)
 	_apply_bone_dangle(skeleton, &"Neck", head_sway_axis, alternating * head_sway_degrees)
 	_apply_bone_dangle(skeleton, &"Head", head_nod_axis, bob * head_nod_degrees)
-	_apply_bone_dangle(skeleton, &"Spine", head_nod_axis, bob * torso_bob_degrees)
+	_apply_spine_secondary_motion(skeleton, bob, alternating)
 	skeleton.force_update_all_bone_transforms()
 
 func _apply_bone_dangle(skeleton: Skeleton3D, bone_name: StringName, axis: Vector3, degrees: float) -> void:
@@ -757,6 +1288,25 @@ func _apply_bone_dangle(skeleton: Skeleton3D, bone_name: StringName, axis: Vecto
 	var offset := Quaternion(axis.normalized(), deg_to_rad(degrees))
 	var posed := baseline
 	posed.basis = Basis(baseline.basis.get_rotation_quaternion() * offset)
+	skeleton.set_bone_pose(bone_index, posed)
+
+func _apply_spine_secondary_motion(skeleton: Skeleton3D, bob: float, alternating: float) -> void:
+	# Spine receives two independent inertial components. Compose them before
+	# writing the pose because _apply_bone_dangle intentionally resets each bone
+	# to its captured baseline on every call; two separate calls would erase the
+	# first component instead of producing a combined bob-and-roll response.
+	var bone_index := skeleton.find_bone(&"Spine")
+	if bone_index < 0 or bone_index >= _female_secondary_baseline.size():
+		return
+	var baseline := _female_secondary_baseline[bone_index]
+	skeleton.set_bone_pose(bone_index, baseline)
+	var rotation := Quaternion.IDENTITY
+	if not is_zero_approx(torso_bob_degrees) and head_nod_axis.length_squared() >= 0.000001:
+		rotation = rotation * Quaternion(head_nod_axis.normalized(), deg_to_rad(bob * torso_bob_degrees))
+	if not is_zero_approx(spine_sway_degrees) and spine_sway_axis.length_squared() >= 0.000001:
+		rotation = rotation * Quaternion(spine_sway_axis.normalized(), deg_to_rad(alternating * spine_sway_degrees))
+	var posed := baseline
+	posed.basis = Basis(baseline.basis.get_rotation_quaternion() * rotation.normalized())
 	skeleton.set_bone_pose(bone_index, posed)
 
 func _target_rhythm(player: AnimationPlayer, male_skeleton: Skeleton3D) -> Vector3:
@@ -828,17 +1378,36 @@ func _update_female_contact_markers() -> void:
 		pelvis_marker.global_transform = female_skeleton.global_transform * female_skeleton.get_bone_global_pose(pelvis_index) * female_pelvis_contact_offset
 	if thigh_marker != null:
 		thigh_marker.global_transform = female_skeleton.global_transform * female_skeleton.get_bone_global_pose(thigh_index) * female_thigh_contact_offset
+	var carrier := get_node_or_null(carrier_root_path) as Node3D
+	var right_pole := anchors.get_node_or_null("MaleRightArmPole") as Marker3D
+	var pole := anchors.get_node_or_null("MaleLeftArmPole") as Marker3D
+	if carrier != null and right_pole != null and right_hand_contact_pole_captured:
+		right_pole.global_transform = carrier.global_transform * right_hand_contact_pole_offset
+	if carrier != null and pole != null and left_hand_contact_pole_captured:
+		pole.global_transform = carrier.global_transform * left_hand_contact_pole_offset
 
 func _configure_hand_contact_ik() -> void:
 	var right := get_node_or_null(right_hand_contact_modifier) as SkeletonModifier3D
 	var left := get_node_or_null(left_hand_contact_modifier) as SkeletonModifier3D
-	var preview_allowed := not Engine.is_editor_hint() or preview_procedural_motion_in_editor
+	var right_orientation := get_node_or_null(right_hand_contact_orientation_modifier) as SkeletonModifier3D
+	var left_orientation := get_node_or_null(left_hand_contact_orientation_modifier) as SkeletonModifier3D
+	# Hand contact is an explicit interaction feature. Do not silently gate it
+	# behind the broader secondary-motion preview switch: in the editor a user
+	# may want only the carrier's hand solve while keeping female dangle motion
+	# disabled. The hand-contact checkbox itself is the opt-in in that case.
+	var preview_allowed := not Engine.is_editor_hint() or preview_procedural_motion_in_editor or hand_contact_ik_enabled
 	if right != null:
 		right.active = preview_allowed and hand_contact_ik_enabled and right_hand_contact_influence > 0.0
 		right.influence = right_hand_contact_influence if preview_allowed and hand_contact_ik_enabled else 0.0
+	if right_orientation != null:
+		right_orientation.active = preview_allowed and hand_contact_ik_enabled and right_hand_contact_orientation_enabled and right_hand_contact_influence > 0.0
+		right_orientation.influence = right_hand_contact_influence if preview_allowed and hand_contact_ik_enabled and right_hand_contact_orientation_enabled else 0.0
 	if left != null:
 		left.active = preview_allowed and hand_contact_ik_enabled and left_hand_contact_influence > 0.0
 		left.influence = left_hand_contact_influence if preview_allowed and hand_contact_ik_enabled else 0.0
+	if left_orientation != null:
+		left_orientation.active = preview_allowed and hand_contact_ik_enabled and left_hand_contact_orientation_enabled and left_hand_contact_influence > 0.0
+		left_orientation.influence = left_hand_contact_influence if preview_allowed and hand_contact_ik_enabled and left_hand_contact_orientation_enabled else 0.0
 
 func _capture_editor_preview_baseline() -> void:
 	var female := get_node_or_null("ManualCarryBlock/IK_character") as Node3D

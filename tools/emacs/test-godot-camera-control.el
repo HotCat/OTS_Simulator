@@ -163,6 +163,17 @@
       (godot-ots-carry-play-h3-heavy-load-hybrid))
     (should (equal (car message) "walk.ots_carry.play"))
     (should (equal (cdr (assoc "animation" (cdr message)))
+                   "h3_heavy_load_hybrid_smooth/ots_h3_heavy_load_walk_hybrid_smooth"))
+    (should (eq (cdr (assoc "restart" (cdr message))) t))))
+
+(ert-deftest godot-ots-carry-play-h3-heavy-load-hybrid-raw-sends-animation-command ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties)))))
+      (godot-ots-carry-play-h3-heavy-load-hybrid-raw))
+    (should (equal (car message) "walk.ots_carry.play"))
+    (should (equal (cdr (assoc "animation" (cdr message)))
                    "h3_heavy_load_hybrid/ots_h3_heavy_load_walk_hybrid"))
     (should (eq (cdr (assoc "restart" (cdr message))) t))))
 
@@ -226,5 +237,21 @@
       (should (= (cdr (assoc "program_end_padding" options)) 0.25))
       (should (eq (cdr (assoc "auto_resolution" options)) t))
       (should-not (assoc "duration" options)))))
+
+(ert-deftest godot-walk-record-camera-motion-stops-follow-at-time ()
+  (let (message)
+    (cl-letf (((symbol-function 'godot-camera--send)
+               (lambda (type &rest properties)
+                 (setq message (cons type properties)))))
+      (godot-female-walk-record-camera-motion
+       :duration 9.0 :fps 24 :camera-follow-stop-at 6.0))
+    (let ((options (cdr (assoc "options" (cdr message)))))
+      (should (equal (car message) "walk.record_camera_motion"))
+      (should (= (cdr (assoc "camera_follow_stop_at" options)) 6.0)))))
+
+(ert-deftest godot-walk-record-camera-motion-rejects-negative-follow-cutoff ()
+  (should-error
+   (godot-female-walk-record-camera-motion :camera-follow-stop-at -0.1)
+   :type 'user-error))
 
 ;;; test-godot-camera-control.el ends here
