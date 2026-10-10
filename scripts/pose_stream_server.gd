@@ -36,6 +36,16 @@ const WALK_TRANSPORT_CAPABILITIES: Array[String] = [
 	"walk.restart",
 	"walk.trajectory.restart",
 	"walk.ots_carry.play",
+	"walk.cpr_servo.play",
+	"walk.cpr_servo.pause",
+	"walk.cpr_servo.restart",
+	"walk.cpr_servo.status",
+	"walk.cpr_servo.calibrate",
+	"walk.cpr_servo.capture_markers",
+	"walk.cpr_servo.capture_current_pose",
+	"walk.cpr_servo.capture_female_pose",
+	"walk.cpr_servo.enable_marker_edit",
+	"walk.cpr_servo.disable_marker_edit",
 	"walk.collapse.play",
 	"walk.collapse.stop",
 	"walk.refresh_trajectory",
@@ -213,6 +223,8 @@ func _handle_walk_transport_message(message_type: String, message: Dictionary) -
 		return _handle_trajectory_restart(scene, message)
 	if message_type == "walk.ots_carry.play":
 		return _handle_ots_carry_play(scene, message)
+	if message_type.begins_with("walk.cpr_servo."):
+		return _handle_cpr_servo_transport(scene, message_type, message)
 	if message_type == "walk.ots_motion_matching.play":
 		return _handle_ots_motion_matching_play(scene, message)
 	if message_type == "walk.ots_motion_matching.set":
@@ -362,6 +374,55 @@ func _handle_ots_carry_play(scene: Node, message: Dictionary) -> Dictionary:
 	result["target_node"] = str(target.get_path())
 	return result
 
+func _resolve_cpr_director(scene: Node, message: Dictionary) -> Node:
+	var target_name := str(message.get("target_node", "IkeaSampleRoomFemaleCompare"))
+	var target := scene.get_node_or_null(NodePath(target_name)) as Node
+	if target == null and str(scene.name) == target_name:
+		target = scene
+	if target == null and not target_name.contains("/"):
+		var matches: Array[Node] = []
+		_find_nodes_by_name(scene, target_name, matches)
+		if matches.size() == 1:
+			target = matches[0]
+	# A dedicated CPR scene controller is also safe as the current root. This
+	# keeps Emacs shots independent of the exact root scene name.
+	if target == null and scene.has_method("editor_servo_play"):
+		target = scene
+	return target
+
+func _handle_cpr_servo_transport(scene: Node, message_type: String, message: Dictionary) -> Dictionary:
+	if not Engine.is_editor_hint():
+		return {"type": "error", "error": "cpr_servo_editor_only"}
+	var target := _resolve_cpr_director(scene, message)
+	if target == null:
+		return {"type": "error", "error": "cpr_servo_director_not_found"}
+	var method_name := ""
+	match message_type:
+		"walk.cpr_servo.play": method_name = "editor_servo_play"
+		"walk.cpr_servo.pause": method_name = "editor_servo_pause"
+		"walk.cpr_servo.restart": method_name = "editor_servo_restart"
+		"walk.cpr_servo.status": method_name = "editor_servo_status"
+		"walk.cpr_servo.calibrate": method_name = "editor_servo_calibrate"
+		"walk.cpr_servo.capture_markers": method_name = "editor_servo_capture_markers"
+		"walk.cpr_servo.capture_current_pose": method_name = "editor_servo_capture_current_male_pose"
+		"walk.cpr_servo.capture_female_pose": method_name = "editor_servo_capture_current_female_pose"
+		"walk.cpr_servo.enable_marker_edit": method_name = "editor_servo_enable_marker_edit"
+		"walk.cpr_servo.disable_marker_edit": method_name = "editor_servo_disable_marker_edit"
+		_: return {"type": "error", "error": "unsupported_cpr_servo_message_type"}
+	if not target.has_method(method_name):
+		return {"type": "error", "error": "cpr_servo_method_unavailable", "method": method_name}
+	var result = target.call(method_name)
+	if result is Dictionary:
+		result = result.duplicate()
+	else:
+		result = {"ok": true}
+	if not bool(result.get("ok", false)):
+		result["type"] = "error"
+		return result
+	result["type"] = _walk_response_type(message_type)
+	result["target_node"] = str(target.get_path())
+	return result
+
 func _resolve_ots_owner(scene: Node, message: Dictionary) -> Node:
 	var target_name := str(message.get("target_node", "OTSCarryClayProxy"))
 	var target := scene.get_node_or_null(NodePath(target_name)) as Node
@@ -440,6 +501,16 @@ func _walk_response_type(message_type: String) -> String:
 		"walk.restart": return "walk.restarted"
 		"walk.trajectory.restart": return "walk.trajectory.restarted"
 		"walk.ots_carry.play": return "walk.ots_carry.playing"
+		"walk.cpr_servo.play": return "walk.cpr_servo.playing"
+		"walk.cpr_servo.pause": return "walk.cpr_servo.paused"
+		"walk.cpr_servo.restart": return "walk.cpr_servo.restarted"
+		"walk.cpr_servo.status": return "walk.cpr_servo.status"
+		"walk.cpr_servo.calibrate": return "walk.cpr_servo.calibrated"
+		"walk.cpr_servo.capture_markers": return "walk.cpr_servo.markers_captured"
+		"walk.cpr_servo.capture_current_pose": return "walk.cpr_servo.male_pose_captured"
+		"walk.cpr_servo.capture_female_pose": return "walk.cpr_servo.female_pose_captured"
+		"walk.cpr_servo.enable_marker_edit": return "walk.cpr_servo.marker_edit_enabled"
+		"walk.cpr_servo.disable_marker_edit": return "walk.cpr_servo.marker_edit_disabled"
 		"walk.ots_motion_matching.play": return "walk.ots_motion_matching.playing"
 		"walk.ots_motion_matching.set": return "walk.ots_motion_matching.set"
 		"walk.ots_motion_matching.configure": return "walk.ots_motion_matching.configured"

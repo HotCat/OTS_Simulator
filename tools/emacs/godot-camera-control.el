@@ -59,6 +59,15 @@
   :type 'string
   :group 'godot-camera)
 
+(defcustom godot-camera-cpr-servo-node "IkeaSampleRoomFemaleCompare"
+  "Scene-relative node owning the editor CPR servo controls.
+
+The default is the root of `ikea_sample_room_female_compare.tscn'.  Set this
+to a wrapper node name or scene-relative path when the CPR comparison scene is
+instanced below another shot root."
+  :type 'string
+  :group 'godot-camera)
+
 (defcustom godot-character-node "IK_character"
   "Scene-relative character node used by the pose-stream commands."
   :type 'string
@@ -320,6 +329,33 @@ This edits Emacs state only; `godot-camera-send-program' transmits it."
     (setq godot-camera--initial-view (nreverse view))
     (message "Set quaternion-safe initial camera view for %s" godot-camera--program-name)
     godot-camera--initial-view))
+
+;;;###autoload
+(cl-defun godot-camera-apply-initial-view
+    (&key position quaternion x y z pitch roll yaw rotation-degrees
+          (target-node godot-camera-default-target) (viewport 1))
+  "Apply an initial view to Godot immediately, without loading a program.
+
+Unlike `godot-camera-set-initial-view', this sends `camera.view.set' to the
+editor immediately.  POSITION and QUATERNION use the same character-relative
+coordinates as the program builder.  TARGET-NODE is the character whose
+coordinate space contains POSITION; VIEWPORT is the human-facing 1-based
+editor viewport number."
+  (interactive)
+  (unless (and (integerp viewport) (<= 1 viewport 4))
+    (user-error "Viewport must be an integer from 1 through 4"))
+  (let ((view (godot-camera-set-initial-view
+               :position position :quaternion quaternion
+               :x x :y y :z z :pitch pitch :roll roll :yaw yaw
+               :rotation-degrees rotation-degrees)))
+    (godot-camera--send
+     "camera.view.set"
+     `("view" . ,(append view
+                           `(("target_node" . ,target-node)
+                             ("viewport_index" . ,(1- viewport))))))
+    (message "Applied initial camera view to viewport %d (%s)"
+             viewport target-node)
+    view))
 
 ;;;###autoload
 (defun godot-camera-restore-initial-view ()
@@ -786,6 +822,132 @@ argument keeps the current route position."
    "walk.ots_motion_matching.play"
    `("target_node" . ,godot-camera-ots-carry-node)
    `("restart" . ,(if restart t :json-false))))
+
+;;;###autoload
+(cl-defun godot-ikea-cpr-servo-play (&optional (restart t))
+  "Play the nine-second CPR servo in the IKEA comparison scene.
+
+The servo starts from the saved CPR source pose, enables the male hand IK,
+and drives both palm contacts plus the female's lagged torso/soft-tissue
+response.  With RESTART non-nil (the default), an already-finished servo is
+rewound before playback.  A prefix argument preserves the current time when
+the servo is already active.  The target is
+`godot-camera-cpr-servo-node'."
+  (interactive (list (not current-prefix-arg)))
+  (godot-camera--send
+   "walk.cpr_servo.play"
+   `("target_node" . ,godot-camera-cpr-servo-node)
+   `("restart" . ,(if restart t :json-false))))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-pause ()
+  "Pause the CPR servo while leaving its current hand and receiver pose visible."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.pause"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-restart ()
+  "Restart the CPR servo at time zero without changing calibrated contacts."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.restart"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-status ()
+  "Request CPR servo time, compression, and hand-contact telemetry."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.status"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-calibrate-hands ()
+  "Calibrate CPR palm contacts from the current saved CPR source pose.
+
+Use this after posing the male through `MaleCarrier/Character/Skeleton3D'
+with Quick FK, before moving the visible palm markers for a final correction."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.calibrate"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-capture-hand-markers ()
+  "Store the visible CPR palm marker positions and orientations.
+
+The markers are `CPRServoAnchors/LeftPalmTarget' and
+`CPRServoAnchors/RightPalmTarget'; they are interpreted relative to the
+female's `UpperChest' and drive the male's bilateral hand IK."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.capture_markers"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-capture-male-hand-pose ()
+  "Capture the current Quick FK pose from MaleCarrier's Skeleton3D.
+
+This command deliberately does not seek the baked CPR clips. Pose
+`MaleCarrier/Character/Skeleton3D` first, then invoke this command so the
+male wrists become the CPR servo baseline. Use
+`godot-ikea-cpr-servo-capture-hand-markers` afterward only if you want to
+fine-tune the visible palm markers independently."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.capture_current_pose"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-capture-female-pose ()
+  "Capture the current Female190 Skeleton3D pose as the CPR receiver baseline.
+
+Pose the female first with Quick FK, then invoke this command. It does not
+seek the baked receiving clip; subsequent CPR playback starts from this pose."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.capture_female_pose"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-enable-marker-edit ()
+  "Enable male hand IK while keeping the CPR servo paused for marker editing.
+
+Run this after `godot-ikea-cpr-servo-capture-male-hand-pose'.  The response
+reports `editor_mode=marker_edit' and `ik_enabled=true'."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.enable_marker_edit"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;;;###autoload
+(defun godot-ikea-cpr-servo-disable-marker-edit ()
+  "Disable CPR IK and restore the captured source pose for Quick FK editing."
+  (interactive)
+  (godot-camera--send
+   "walk.cpr_servo.disable_marker_edit"
+   `("target_node" . ,godot-camera-cpr-servo-node)))
+
+;; Scene-agnostic short names for shot files.  The IKEA-prefixed commands are
+;; retained as the discoverable names because they document the current scene
+;; contract; these aliases make the transport convenient in future CPR rooms.
+(defalias 'godot-cpr-servo-play #'godot-ikea-cpr-servo-play)
+(defalias 'godot-cpr-servo-pause #'godot-ikea-cpr-servo-pause)
+(defalias 'godot-cpr-servo-restart #'godot-ikea-cpr-servo-restart)
+(defalias 'godot-cpr-servo-status #'godot-ikea-cpr-servo-status)
+(defalias 'godot-cpr-servo-calibrate-hands #'godot-ikea-cpr-servo-calibrate-hands)
+(defalias 'godot-cpr-servo-capture-hand-markers
+  #'godot-ikea-cpr-servo-capture-hand-markers)
+(defalias 'godot-cpr-servo-capture-male-hand-pose
+  #'godot-ikea-cpr-servo-capture-male-hand-pose)
+(defalias 'godot-cpr-servo-capture-female-pose
+  #'godot-ikea-cpr-servo-capture-female-pose)
+(defalias 'godot-cpr-servo-enable-marker-edit
+  #'godot-ikea-cpr-servo-enable-marker-edit)
+(defalias 'godot-cpr-servo-disable-marker-edit
+  #'godot-ikea-cpr-servo-disable-marker-edit)
 
 ;;;###autoload
 (defun godot-ots-carry-set-motion-matching (enabled)

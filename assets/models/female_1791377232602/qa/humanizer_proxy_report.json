@@ -1,0 +1,174 @@
+{
+  "animations": [
+    "animations/Idle",
+    "animations/Run"
+  ],
+  "body_material": "young_asian_female",
+  "body_surface_index": 0,
+  "calibrated_body_geometry_height_m": 1.91883879550733,
+  "calibrated_height_macro": 0.785102605819702,
+  "combined_avatar_mesh_count": 1,
+  "equipment_slots": {
+    "body": "Body-Default",
+    "hair": "Hair-Ponytail01_Rigged",
+    "lefteye": "LeftEye-LowPolyEyeball",
+    "lefteyebrow": "LeftEyebrow-002",
+    "lefteyelash": "LeftEyelash",
+    "righteye": "RightEye-LowPolyEyeball",
+    "righteyebrow": "RightEyebrow-002",
+    "righteyelash": "RightEyelash"
+  },
+  "gender_mapping": "identity",
+  "gltf_append_error": 0,
+  "gltf_write_error": 0,
+  "hair_equipment": "Hair-Ponytail01_Rigged",
+  "height_error_m": 8.95073266615753e-08,
+  "helper_head_height_m": 1.92749416828156,
+  "humanizer_gender_value": 0.0,
+  "output_glb": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1791377232602/actor/female_1791377232602_humanizer_proxy.glb",
+  "pipeline": "Humanizer native combined-skinned Avatar",
+  "recognized_custom_target_count": 12,
+  "recognized_custom_targets": [
+    "measure-shoulder-dist-decr",
+    "measure-waist-circ-decr",
+    "hip-scale-horiz-incr",
+    "upperlegs-height-incr",
+    "lowerlegs-height-incr",
+    "measure-thigh-circ-incr",
+    "head-oval",
+    "head-scale-horiz-decr",
+    "chin-width-decr",
+    "l-eye-epicanthus-in",
+    "r-eye-epicanthus-in",
+    "nose-scale-depth-decr"
+  ],
+  "rejected_custom_targets": [],
+  "sex_label": "female",
+  "skeleton_bone_count": 56,
+  "skeleton_count": 1,
+  "source_gender_value": 0.0,
+  "source_preset": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1791377232602/actor/human.female_1791377232602.json",
+  "surface_count": 8,
+  "surface_equipment_order": [
+    "Body-Default",
+    "RightEye-LowPolyEyeball",
+    "LeftEye-LowPolyEyeball",
+    "RightEyebrow-002",
+    "LeftEyebrow-002",
+    "RightEyelash",
+    "LeftEyelash",
+    "Hair-Ponytail01_Rigged"
+  ],
+  "target_height_m": 1.918838706,
+  "requested_anatomical_height_m": 1.9,
+  "final_requested_morphology_height_m": 1.9188387058812109,
+  "final_fresh_import_height_m": 1.9000474996864796,
+  "final_fresh_import_body_height_m": 1.9000474996864796,
+  "final_fresh_import_visual_height_m": 1.9084201641380787,
+  "height_measurement_surface_index": 0,
+  "fresh_import_height_error_m": 4.74996864796573e-05,
+  "height_tolerance_m": 0.001,
+  "height_calibration_trials": [
+    {
+      "iteration": 1,
+      "requested_morphology_height_m": 1.9,
+      "fresh_import_height_m": 1.8813462480902672,
+      "fresh_import_body_height_m": 1.8813462480902672,
+      "fresh_import_visual_height_m": 1.8896609768271446,
+      "height_measurement_surface_index": 0,
+      "error_m": -0.01865375190973273,
+      "calibrated_height_macro": 0.772067427635193
+    },
+    {
+      "iteration": 2,
+      "requested_morphology_height_m": 1.9188387058812109,
+      "fresh_import_height_m": 1.9000474996864796,
+      "fresh_import_body_height_m": 1.9000474996864796,
+      "fresh_import_visual_height_m": 1.9084201641380787,
+      "height_measurement_surface_index": 0,
+      "error_m": 4.74996864796573e-05,
+      "calibrated_height_macro": 0.785102605819702
+    }
+  ],
+  "strict_glb_validation": {
+    "passed": true,
+    "failures": [],
+    "glb": "/Users/hotcat/zhouyu/windowSize/makehuman_actor_1791377232602/actor/female_1791377232602_humanizer_proxy.glb",
+    "file_size_bytes": 1966516,
+    "raw": {
+      "node_count": 61,
+      "mesh_count": 1,
+      "skin_count": 1,
+      "material_count": 8,
+      "image_count": 0,
+      "images": [],
+      "texture_count": 0,
+      "material_texture_indices": [],
+      "referenced_image_indices": [],
+      "contains_icosphere": false,
+      "mesh_nodes": [
+        {
+          "name": "Avatar",
+          "mesh": 0,
+          "skin": 0
+        }
+      ],
+      "unskinned_mesh_nodes": [],
+      "surface_count": 8,
+      "animation_names": [
+        "animations_Idle",
+        "animations_Run"
+      ]
+    },
+    "fresh_import": {
+      "mesh_objects": [
+        "Avatar",
+        "Icosphere"
+      ],
+      "payload_meshes": [
+        "Avatar"
+      ],
+      "importer_helpers": [
+        "Icosphere"
+      ],
+      "armatures": [
+        "female_1791377232602_humanizer_proxy_Humanizer_RealtimeProxy"
+      ],
+      "bone_counts": {
+        "female_1791377232602_humanizer_proxy_Humanizer_RealtimeProxy": 56
+      },
+      "weighted_meshes": [
+        "Avatar"
+      ],
+      "animation_names": [
+        "animations_Idle",
+        "animations_Run"
+      ],
+      "bounds_min": [
+        -0.2938009798526764,
+        -0.30441737174987793,
+        -0.05688806250691414
+      ],
+      "bounds_max": [
+        0.3132847845554352,
+        0.1107284277677536,
+        1.8431594371795654
+      ],
+      "height_m": 1.9000474996864796,
+      "height_surface_index": 0,
+      "height_surface_vertex_count": 14517,
+      "visual_bounds_min": [
+        -0.2938009798526764,
+        -0.30441737174987793,
+        -0.05688806250691414
+      ],
+      "visual_bounds_max": [
+        0.3132847845554352,
+        0.1107284277677536,
+        1.8515321016311646
+      ],
+      "visual_height_m": 1.9084201641380787
+    }
+  },
+  "global_scale_used": false
+}

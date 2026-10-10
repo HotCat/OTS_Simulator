@@ -1,0 +1,84 @@
+{
+    "clothes": [],
+    "color_adjustments": {},
+    "expressions": [],
+    "eyebrows": "",
+    "eyelashes": "",
+    "eyes": "",
+    "eyes_material_settings": {},
+    "eyes_material_type": "MAKESKIN",
+    "hair": "",
+    "makeup": [],
+    "phenotype": {
+        "age": 0.4399999976158142,
+        "cupsize": 0.6200000047683716,
+        "firmness": 0.6399999856948853,
+        "gender": 0.0,
+        "height": 0.8353271484375,
+        "muscle": 0.4300000071525574,
+        "proportions": 0.699999988079071,
+        "race": {
+            "african": 0.0,
+            "asian": 1.0,
+            "caucasian": 0.0
+        },
+        "weight": 0.47999998927116394
+    },
+    "proxy": "",
+    "rig": "game_engine",
+    "skin_material_settings": {},
+    "skin_material_type": "GAMEENGINE",
+    "skin_mhmat": "",
+    "targets": [
+        {
+            "target": "measure-shoulder-dist-decr",
+            "value": 0.07000000029802322
+        },
+        {
+            "target": "measure-waist-circ-decr",
+            "value": 0.07999999821186066
+        },
+        {
+            "target": "hip-scale-horiz-incr",
+            "value": 0.10999999940395355
+        },
+        {
+            "target": "upperlegs-height-incr",
+            "value": 0.05999999865889549
+        },
+        {
+            "target": "lowerlegs-height-incr",
+            "value": 0.03999999910593033
+        },
+        {
+            "target": "measure-thigh-circ-incr",
+            "value": 0.05000000074505806
+        },
+        {
+            "target": "head-oval",
+            "value": 0.17000000178813934
+        },
+        {
+            "target": "head-scale-horiz-decr",
+            "value": 0.029999999329447746
+        },
+        {
+            "target": "chin-width-decr",
+            "value": 0.05999999865889549
+        },
+        {
+            "target": "l-eye-epicanthus-in",
+            "value": 0.10000000149011612
+        },
+        {
+            "target": "r-eye-epicanthus-in",
+            "value": 0.10000000149011612
+        },
+        {
+            "target": "nose-scale-depth-decr",
+            "value": 0.03999999910593033
+        }
+    ],
+    "teeth": "",
+    "tongue": ""
+}

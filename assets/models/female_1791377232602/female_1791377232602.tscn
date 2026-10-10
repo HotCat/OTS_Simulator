@@ -1,0 +1,80 @@
+[gd_scene format=3 uid="uid://bmcfdkubockrn"]
+
+[ext_resource type="PackedScene" uid="uid://dhunqvfs4aa06" path="res://assets/models/female_1791377232602/female_1791377232602_humanizer_proxy.glb" id="1_new"]
+[ext_resource type="PackedScene" uid="uid://d23nf1vbq61s6" path="res://assets/models/actor_1787313553107_v2_realtime_proxy.glb" id="2_current"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor"]
+size = Vector3(4.5, 0.04, 1.7)
+
+[sub_resource type="StandardMaterial3D" id="Material_floor"]
+albedo_color = Color(0.2, 0.23, 0.27, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_height_guide"]
+size = Vector3(4.3, 0.008, 0.008)
+
+[sub_resource type="StandardMaterial3D" id="Material_height_guide"]
+shading_mode = 0
+albedo_color = Color(0.25, 0.65, 0.7, 1)
+
+[sub_resource type="Environment" id="Environment_comparison"]
+background_mode = 1
+background_color = Color(0.11, 0.13, 0.16, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.7, 0.75, 0.85, 1)
+ambient_light_energy = 0.65
+
+[node name="Female_1791377232602_Comparison" type="Node3D" unique_id=1061905605]
+
+[node name="Current_OTS_Female_About_180cm" parent="." unique_id=1415895151 instance=ExtResource("2_current")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.47197413, 0, 0)
+
+[node name="New_Female_190cm" parent="." unique_id=374220519 instance=ExtResource("1_new")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.18386507, 0, 0)
+
+[node name="Floor" type="MeshInstance3D" parent="." unique_id=271077701]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.025, 0)
+mesh = SubResource("BoxMesh_floor")
+surface_material_override/0 = SubResource("Material_floor")
+
+[node name="HeightGuide_1m" type="MeshInstance3D" parent="." unique_id=635273937]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0.55)
+mesh = SubResource("BoxMesh_height_guide")
+surface_material_override/0 = SubResource("Material_height_guide")
+
+[node name="HeightGuide_180cm" type="MeshInstance3D" parent="." unique_id=1101833665]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.8, 0.55)
+mesh = SubResource("BoxMesh_height_guide")
+surface_material_override/0 = SubResource("Material_height_guide")
+
+[node name="HeightGuide_190cm" type="MeshInstance3D" parent="." unique_id=1162737922]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.9, 0.55)
+mesh = SubResource("BoxMesh_height_guide")
+surface_material_override/0 = SubResource("Material_height_guide")
+
+[node name="Label_Current_OTS_Female" type="Label3D" parent="." unique_id=761234470]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 2.13, 0)
+pixel_size = 0.002
+modulate = Color(0.65, 0.85, 1, 1)
+text = "Current OTS female (~1.80 m)"
+font_size = 42
+outline_size = 6
+
+[node name="Label_New_Female" type="Label3D" parent="." unique_id=728409275]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 2.13, 0)
+pixel_size = 0.002
+modulate = Color(1, 0.82, 0.55, 1)
+text = "New female (1.90 m barefoot)"
+font_size = 42
+outline_size = 6
+
+[node name="ComparisonCamera" type="Camera3D" parent="." unique_id=2012744517]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 1.05, -5.7)
+current = true
+fov = 39.0
+
+[node name="ComparisonLight" type="DirectionalLight3D" parent="." unique_id=1256552015]
+transform = Transform3D(0.866025, -0.25, -0.433013, 0, 0.866025, -0.5, 0.5, 0.433013, 0.75, 0, 0, 0)
+light_energy = 1.3
+
+[node name="ComparisonEnvironment" type="WorldEnvironment" parent="." unique_id=1562621599]
+environment = SubResource("Environment_comparison")

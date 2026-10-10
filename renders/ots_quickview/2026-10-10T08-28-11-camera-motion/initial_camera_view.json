@@ -1,0 +1,39 @@
+{
+  "schema": "godot-ots-editor-camera-initial-view",
+  "version": 1,
+  "source_camera_motion": "camera_motion.json",
+  "source_scene": "res://demos/ikea_sample_room_female_compare.tscn",
+  "viewport_index": 1,
+  "target_node": "Female181/IK_character",
+  "sample_frame": 0,
+  "time_seconds": 0.0,
+  "space": "character_relative",
+  "position": [
+    -2.383820534,
+    0.590367615,
+    -2.315844059
+  ],
+  "quaternion_xyzw": [
+    -0.436212540,
+    -0.369110435,
+    -0.233606294,
+    0.786704659
+  ],
+  "global_camera_position": [
+    0.221794605,
+    1.255323411,
+    0.784378648
+  ],
+  "global_camera_quaternion_xyzw": [
+    -0.279171079,
+    0.697001398,
+    0.345764548,
+    0.562760532
+  ],
+  "character_global_position_at_capture": [
+    -0.952180802,
+    0.868171454,
+    -2.356666327
+  ],
+  "restore_emacs": "(godot-camera-set-initial-view :position '(-2.383820534 0.590367615 -2.315844059) :quaternion '(-0.436212540 -0.369110435 -0.233606294 0.786704659))"
+}

@@ -1,0 +1,456 @@
+[gd_scene format=3 uid="uid://do6oixvbl0bdl"]
+
+[ext_resource type="Script" uid="uid://dlxbskpqwqav0" path="res://scripts/room_comparison_controller.gd" id="1_director"]
+[ext_resource type="PackedScene" uid="uid://g5obfvjgag3g" path="res://assets/environments/ikea_sample_room/ikea_sample_room.glb" id="2_room"]
+[ext_resource type="PackedScene" uid="uid://d23nf1vbq61s6" path="res://assets/models/actor_1787313553107_v2_realtime_proxy.glb" id="3_female181"]
+[ext_resource type="PackedScene" uid="uid://jxhamt3ucpmb" path="res://assets/models/female_1791377232602/female_1791377232602_cpr_deform.glb" id="4_female190"]
+[ext_resource type="Script" uid="uid://670o28pb18j" path="res://scripts/walk_cycle_controller.gd" id="5_walk"]
+[ext_resource type="AnimationLibrary" uid="uid://cyaof44mkoxre" path="res://animations/female_walk_cycle.tres" id="6_walk_anim"]
+[ext_resource type="AnimationLibrary" uid="uid://csqv0ijbjs44p" path="res://animations/female_walk_leg_wounded.tres" id="7_walk_leg"]
+[ext_resource type="AnimationLibrary" uid="uid://ceh3le2wm2gb0" path="res://animations/female_walk_wounded_terminator.tres" id="8_walk_wounded"]
+[ext_resource type="PackedScene" uid="uid://dyktodaiq8ece" path="res://assets/environments/ikea_sample_room/ikea_bed.glb" id="9_bed"]
+[ext_resource type="PackedScene" uid="uid://dinps81it3djp" path="res://assets/environments/ikea_sample_room/ikea_wardrobe.glb" id="10_wardrobe"]
+[ext_resource type="PackedScene" uid="uid://xf1u3sq8i1cb" path="res://assets/environments/ikea_sample_room/ikea_ceiling.glb" id="11_ceiling"]
+[ext_resource type="PackedScene" uid="uid://bxchssmeukfbi" path="res://assets/environments/ikea_sample_room/ikea_grid_door_leaf.glb" id="12_grid_door"]
+[ext_resource type="PackedScene" uid="uid://bguwpmm4ndeo5" path="res://assets/environments/ikea_sample_room/ikea_solid_door_leaf.glb" id="13_solid_door"]
+[ext_resource type="Script" uid="uid://buw3wtimsmnfr" path="res://scripts/adjustable_door_hinge.gd" id="14_door_hinge"]
+[ext_resource type="PackedScene" uid="uid://cg1j2oav0cvxb" path="res://assets/models/male_carrier/male_1785818633452_humanizer_proxy.glb" id="15_male_carrier"]
+[ext_resource type="AnimationLibrary" uid="uid://cro0s4itfs130" path="res://animations/ikea_cpr_male.tres" id="16_male_cpr"]
+[ext_resource type="AnimationLibrary" uid="uid://o54n55g2l7rk" path="res://animations/ikea_cpr_female190.tres" id="17_female190_cpr"]
+[ext_resource type="Script" uid="uid://c1xbdq40tihjq" path="res://scripts/cpr_servo_controller.gd" id="18_cpr_servo"]
+[ext_resource type="AnimationLibrary" uid="uid://b6gkpu5m3mr47" path="res://animations/ikea_female181_sleeping_idle.tres" id="19_sleeping_idle"]
+
+[sub_resource type="Environment" id="Environment_ikea"]
+background_mode = 1
+background_color = Color(0.17, 0.18, 0.16, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.78, 0.8, 0.76, 1)
+ambient_light_energy = 0.75
+tonemap_mode = 2
+
+[node name="IkeaSampleRoomFemaleCompare" type="Node3D" unique_id=2005931732]
+editor_description = "Reusable multi-character blocking room: 30 m² IKEA-style room shell with two separately movable furniture GLBs, two independent female rigs and walk paths, Quick FK-compatible Skeleton3D instances, and fixed-step OTS Render coordination."
+script = ExtResource("1_director")
+metadata/room_area_m2 = 30.0
+metadata/room_dimensions_m = Vector2(5, 6)
+metadata/architecture = "independent_character_rig > independent_animation_player > independent_walk_controller > shared_capture_director"
+
+[node name="IkeaSampleRoom" parent="." unique_id=386187364 instance=ExtResource("2_room")]
+editor_description = "Architectural shell and rug only. The ceiling, movable door leaves, bed, and wardrobe are separate sibling instances."
+
+[node name="Ceiling" parent="." unique_id=43192368 instance=ExtResource("11_ceiling")]
+editor_description = "Hidden for free camera angles. Show this instance when recording a shot that sees the 2.70 m ceiling."
+visible = false
+
+[node name="GridDoorHinge" type="Node3D" parent="." unique_id=707931342]
+editor_description = "South grid-glazed door. Set Opening Angle Degrees in the Inspector; positive angles swing inward."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.45, 0, 3)
+script = ExtResource("14_door_hinge")
+opening_angle_degrees = 73.0
+
+[node name="Leaf" parent="GridDoorHinge" unique_id=886454889 instance=ExtResource("12_grid_door")]
+transform = Transform3D(0.29237178, 0, 0.9563047, 0, 1, 0, -0.9563047, 0, 0.29237178, 0, 0, 0)
+
+[node name="SolidDoorHinge" type="Node3D" parent="." unique_id=1516661528]
+editor_description = "East solid door. Set Opening Angle Degrees in the Inspector; positive angles swing inward."
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 2.5, 0, 2)
+script = ExtResource("14_door_hinge")
+opening_angle_degrees = 59.0
+
+[node name="Leaf" parent="SolidDoorHinge" unique_id=583114353 instance=ExtResource("13_solid_door")]
+transform = Transform3D(0.5150381, 0, 0.8571673, 0, 1, 0, -0.8571673, 0, 0.5150381, 0, 0, 0)
+
+[node name="Bed" parent="." unique_id=419632055 instance=ExtResource("9_bed")]
+editor_description = "Move or rotate this whole instance. Physical envelope: 1.92 m wide × 2.07 m long; headboard 1.01 m high."
+transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, -1.3, 0, -1.9)
+
+[node name="Wardrobe" parent="." unique_id=1724153918 instance=ExtResource("10_wardrobe")]
+editor_description = "Move or rotate this whole instance. Cabinet envelope: 0.82 m wide × 0.60 m deep × 1.94 m high; open doors extend beyond the cabinet envelope."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.2429886, 0, -2.65)
+
+[node name="RoomEnvironment" type="WorldEnvironment" parent="." unique_id=1764129578]
+environment = SubResource("Environment_ikea")
+
+[node name="KeyLight" type="DirectionalLight3D" parent="." unique_id=330067099]
+transform = Transform3D(0.90630776, 0.3140666, -0.2827868, 0, 0.66913056, 0.74314487, 0.42261827, -0.67351794, 0.6064382, 0, 0, 0)
+light_color = Color(1, 0.94, 0.84, 1)
+light_energy = 1.15
+shadow_enabled = true
+
+[node name="FillLight" type="OmniLight3D" parent="." unique_id=2063799401]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.25, -1.6)
+light_color = Color(0.72, 0.82, 1, 1)
+light_energy = 2.2
+omni_range = 8.0
+
+[node name="ComparisonCamera" type="Camera3D" parent="." unique_id=1017960981]
+transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 1.58, -2.35)
+current = true
+fov = 52.0
+
+[node name="OrbitPivot" type="Marker3D" parent="." unique_id=1403895676]
+editor_description = "Stable camera orbit pivot for OTS Render. Select this marker when creating/selecting a pivot."
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.3691721, -0.4345305, 1.1137043)
+
+[node name="CameraOrbitReference" type="Marker3D" parent="OrbitPivot" unique_id=1488128983]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
+gizmo_extents = 0.35
+metadata/ots_camera_orbit_reference = true
+
+[node name="MaleCarrier" type="Node3D" parent="." unique_id=1586169689]
+editor_description = "Staging root for the male carrier. Move this node without changing the CPR floor-contact offset on Character."
+transform = Transform3D(-0.99732745, 0, 0.07306155, 0, 1, 0, -0.07306155, 0, -0.99732745, -0.85, 0.050563037, 1.6214483)
+
+[node name="Character" parent="MaleCarrier" unique_id=1566940606 instance=ExtResource("15_male_carrier")]
+transform = Transform3D(0.97449225, -0.022614304, 0.22327651, 0.07247861, 0.973309, -0.21775319, -0.21239269, 0.22838177, 0.95012116, 0, -0.5775718, 0)
+sync_to_physics = false
+
+[node name="Skeleton3D" parent="MaleCarrier/Character" index="0" unique_id=1467335169]
+process_priority = 1
+editor_description = "Male CPR hand source rig. Select this MaleCarrier/Character/Skeleton3D for Quick FK. Pose LeftHand and RightHand in the frozen CPR source pose, then use the scene root's Calibrate CPR palm contact at source pose. Fine corrections are made with CPRServoAnchors/LeftPalmTarget and RightPalmTarget; the CPR servo's TwoBoneIK3D modifiers below this skeleton drive the wrists during playback."
+bones/2/rotation = Quaternion(0.07021709, 0.3315722, 0.9392147, -0.054819003)
+bones/3/rotation = Quaternion(-0.041977685, 0.3839708, -0.91719514, 0.097761855)
+bones/4/rotation = Quaternion(0.012950821, 0.63284487, -0.77398306, -0.017025512)
+bones/6/rotation = Quaternion(-0.104427196, 0.3120482, 0.9336702, 0.14135332)
+bones/7/rotation = Quaternion(0.022819506, 0.36151475, -0.926796, -0.09917389)
+bones/8/rotation = Quaternion(0.055484623, 0.6554158, -0.75080186, -0.06040203)
+bones/10/position = Vector3(-0.003146029, 0.046153665, -0.023041395)
+bones/10/rotation = Quaternion(0.315221, 0.018835532, -0.06486546, 0.9466115)
+bones/11/position = Vector3(0.00073032756, 0.04570294, 0.036297023)
+bones/11/rotation = Quaternion(0.02413315, 0.0029911725, 0.003986226, 0.9996963)
+bones/12/position = Vector3(0.00033848078, 0.041352548, 0.013029648)
+bones/12/rotation = Quaternion(0.024087323, 0.0034707265, 0.003829548, 0.9996965)
+bones/13/rotation = Quaternion(0.3118521, 0.6588984, 0.5495288, -0.40819043)
+bones/14/rotation = Quaternion(0.39184695, 0.8642613, 0.013748889, 0.3151496)
+bones/15/rotation = Quaternion(-0.04119078, -0.6201409, -0.08408744, 0.77888256)
+bones/16/rotation = Quaternion(-0.24590057, 0.4666932, 0.57890385, 0.6217722)
+bones/17/rotation = Quaternion(0.017799493, 0.11338594, -0.0390854, 0.9926224)
+bones/18/rotation = Quaternion(0.014887715, 0.0036683066, 0.018637864, 0.9997087)
+bones/20/rotation = Quaternion(-0.028429126, -0.05349151, -0.006697809, 0.99814105)
+bones/21/rotation = Quaternion(0.082277596, 0.106340855, 0.04725484, 0.9897924)
+bones/23/rotation = Quaternion(-0.09462223, -0.09970117, -0.017096246, 0.99036056)
+bones/24/rotation = Quaternion(-0.005323672, 0.033637546, -0.00938137, 0.9993759)
+bones/26/rotation = Quaternion(0.008365743, -0.10099959, 0.06521392, 0.99271154)
+bones/27/rotation = Quaternion(0.008583683, 0.05310245, -0.011200565, 0.9984894)
+bones/29/rotation = Quaternion(-0.12921774, 0.62055796, -0.169667, 0.75460166)
+bones/30/rotation = Quaternion(-0.12675682, 0.051753778, 0.044090144, 0.9896011)
+bones/32/rotation = Quaternion(0.37994003, -0.5497544, -0.63603663, -0.38584077)
+bones/33/rotation = Quaternion(-0.33926183, 0.88922614, 0.08985375, -0.29343584)
+bones/34/rotation = Quaternion(-0.053125408, 0.60461134, 0.09629163, 0.7888921)
+bones/35/rotation = Quaternion(-0.45849183, -0.36858815, -0.4316419, 0.6838226)
+bones/36/rotation = Quaternion(-0.05114076, -0.040505532, 0.10207179, 0.99263555)
+bones/37/rotation = Quaternion(-0.0010530296, 0.01866226, -0.0003918711, 0.99982524)
+bones/39/rotation = Quaternion(-0.047612663, 0.07116812, 0.018558808, 0.9961545)
+bones/40/rotation = Quaternion(0.008245842, -0.044706993, 0.0029927033, 0.9989616)
+bones/42/rotation = Quaternion(-0.090183, 0.21504141, -0.033454947, 0.9718565)
+bones/43/rotation = Quaternion(-0.07164089, 0.002498004, 0.030601792, 0.99695784)
+bones/45/rotation = Quaternion(-0.034981545, 0.13310659, -0.042544663, 0.98957)
+bones/46/rotation = Quaternion(-0.03268391, -0.026657648, 0.029665682, 0.9986697)
+bones/48/rotation = Quaternion(-0.12724707, -0.71566224, 0.18521895, 0.6613091)
+bones/49/rotation = Quaternion(-0.17209709, 0.038934927, -0.05586591, 0.9827236)
+bones/51/rotation = Quaternion(0.008598118, 0.0042974525, -0.014459095, 0.99984926)
+
+[node name="cpr_left_arm_ik" type="TwoBoneIK3D" parent="MaleCarrier/Character/Skeleton3D" index="1" unique_id=580110511]
+editor_description = "CPR servo: left wrist follows the left palm marker. The servo enables this only during CPR preview/capture."
+setting_count = 1
+settings/0/target_node = NodePath("../../../../CPRServoAnchors/LeftPalmTarget")
+settings/0/pole_node = NodePath("../../../../CPRServoAnchors/LeftElbowPole")
+settings/0/root_bone_name = "LeftUpperArm"
+settings/0/root_bone = 14
+settings/0/middle_bone_name = "LeftLowerArm"
+settings/0/middle_bone = 15
+settings/0/pole_direction = 0
+settings/0/end_bone_name = "LeftHand"
+settings/0/end_bone = 16
+settings/0/use_virtual_end = false
+settings/0/extend_end_bone = false
+
+[node name="cpr_right_arm_ik" type="TwoBoneIK3D" parent="MaleCarrier/Character/Skeleton3D" index="2" unique_id=2120549730]
+editor_description = "CPR servo: right wrist follows the right palm marker. The servo enables this only during CPR preview/capture."
+setting_count = 1
+settings/0/target_node = NodePath("../../../../CPRServoAnchors/RightPalmTarget")
+settings/0/pole_node = NodePath("../../../../CPRServoAnchors/RightElbowPole")
+settings/0/root_bone_name = "RightUpperArm"
+settings/0/root_bone = 33
+settings/0/middle_bone_name = "RightLowerArm"
+settings/0/middle_bone = 34
+settings/0/pole_direction = 0
+settings/0/end_bone_name = "RightHand"
+settings/0/end_bone = 35
+settings/0/use_virtual_end = false
+settings/0/extend_end_bone = false
+
+[node name="cpr_left_hand_orientation" type="CopyTransformModifier3D" parent="MaleCarrier/Character/Skeleton3D" index="3" unique_id=1614827658]
+editor_description = "Copies only the adjustable left palm marker orientation after arm IK."
+setting_count = 1
+settings/0/amount = 1.0
+settings/0/apply_bone_name = "LeftHand"
+settings/0/apply_bone = 16
+settings/0/reference_type = 1
+settings/0/reference_node = NodePath("../../../../CPRServoAnchors/LeftPalmTarget")
+settings/0/copy = 2
+settings/0/axes = 7
+settings/0/invert = 0
+settings/0/additive = false
+
+[node name="cpr_right_hand_orientation" type="CopyTransformModifier3D" parent="MaleCarrier/Character/Skeleton3D" index="4" unique_id=2066747764]
+editor_description = "Copies only the adjustable right palm marker orientation after arm IK."
+setting_count = 1
+settings/0/amount = 1.0
+settings/0/apply_bone_name = "RightHand"
+settings/0/apply_bone = 35
+settings/0/reference_type = 1
+settings/0/reference_node = NodePath("../../../../CPRServoAnchors/RightPalmTarget")
+settings/0/copy = 2
+settings/0/axes = 7
+settings/0/invert = 0
+settings/0/additive = false
+
+[node name="MaleCPRAnimationPlayer" type="AnimationPlayer" parent="." unique_id=535384191]
+libraries/cpr = ExtResource("16_male_cpr")
+
+[node name="Female190CPRAnimationPlayer" type="AnimationPlayer" parent="." unique_id=500828319]
+libraries/cpr = ExtResource("17_female190_cpr")
+
+[node name="CPRServoAnchors" type="Node3D" parent="." unique_id=1902681006]
+editor_description = "Servo targets and elbow poles for MaleCarrier/Character/Skeleton3D. To adjust hand contact: stop servo, calibrate source pose, show handles, move/rotate LeftPalmTarget and RightPalmTarget with the gizmo, then Capture current CPR palm markers. The targets—not the female skeleton—are the runtime hand controls."
+
+[node name="LeftPalmTarget" type="Marker3D" parent="CPRServoAnchors" unique_id=1012195816]
+physics_interpolation_mode = 2
+transform = Transform3D(-0.98087656, -0.18641812, -0.055941768, -0.08398241, 0.6646744, -0.7423986, 0.17557958, -0.7235031, -0.6676191, -0.95666826, 0.23459388, 0.8707282)
+gizmo_extents = 0.05
+
+[node name="RightPalmTarget" type="Marker3D" parent="CPRServoAnchors" unique_id=1349661657]
+physics_interpolation_mode = 2
+transform = Transform3D(-0.9276229, 0.36244237, 0.09028286, 0.19424881, 0.6745605, -0.71220475, -0.3190344, -0.6431203, -0.6961414, -0.84042966, 0.20736451, 0.89412224)
+gizmo_extents = 0.05
+
+[node name="LeftElbowPole" type="Marker3D" parent="CPRServoAnchors" unique_id=801296954]
+physics_interpolation_mode = 2
+transform = Transform3D(0.23783141, -0.54046935, 0.8070494, -0.8126003, -0.56588185, -0.1394956, 0.5320878, -0.6226318, -0.5737699, -1.0675288, 0.40678215, 0.99463564)
+gizmo_extents = 0.05
+
+[node name="RightElbowPole" type="Marker3D" parent="CPRServoAnchors" unique_id=730614336]
+physics_interpolation_mode = 2
+transform = Transform3D(0.07232483, 0.3861375, -0.91960126, 0.78800094, -0.5873338, -0.18464476, -0.61141133, -0.7112922, -0.34675556, -0.7087345, 0.38601798, 0.9768301)
+gizmo_extents = 0.05
+
+[node name="CPRServoController" type="Node" parent="." unique_id=1330317526]
+editor_description = "Select this node to tune compression rate, count, depth, receiver lag and secondary response. Root-scene buttons run its editor preview."
+script = ExtResource("18_cpr_servo")
+downstroke_fraction = 0.42
+bottom_hold_fraction = 0.01
+press_depth_m = 0.024
+hand_surface_clearance_m = 0.006
+max_hand_surface_depression_m = 0.028
+male_spine_drop_m = 0.044
+male_chest_drop_m = 0.038
+male_upper_chest_drop_m = 0.035
+chest_lag_seconds = 0.03
+neck_nod_degrees = 3.0
+head_nod_degrees = 2.6
+breast_lower_settle_m = 0.0295
+breast_lateral_spread_m = 0.02
+upper_abdomen_inflate_m = 0.025
+lower_abdomen_inflate_m = 0.025
+contact_calibrated = true
+left_wrist_in_chest = Transform3D(0.27573457, -0.7359249, -0.618374, -0.9611046, -0.20049778, -0.18994725, 0.015804145, 0.64669657, -0.7625841, 0.059617996, 0.1097824, 0.20302507)
+right_wrist_in_chest = Transform3D(-0.23582551, -0.710736, -0.6627529, -0.9347366, 0.35243723, -0.04534869, 0.26580986, 0.6088047, -0.7474637, 0.07284361, 0.22494674, 0.16611424)
+female_pose_calibrated = true
+
+[node name="Female181" type="Node3D" parent="." unique_id=1610033946]
+transform = Transform3D(0.91973233, 0.12033965, -0.3736453, -0.11929236, 0.99251807, 0.026019976, 0.3739809, 0.020641616, 0.92720664, -1.3631909, 0.89679354, -1.3367391)
+visible = false
+metadata/height_m = 1.81
+metadata/identity_sheet = "/Users/hotcat/zhouyu/mathexam/grandcherokee/1791379476734.png"
+metadata/character_role = "left comparison subject"
+
+[node name="IK_character" parent="Female181" unique_id=484236404 instance=ExtResource("3_female181")]
+transform = Transform3D(0.11297493, -0.9816404, 0.15368445, 0.8660255, 0.021461813, -0.49953905, 0.48706934, 0.18953003, 0.85255027, 1.0514379, 0.12358601, -0.22043072)
+sync_to_physics = false
+
+[node name="Skeleton3D" parent="Female181/IK_character" index="0" unique_id=1277114286]
+bones/2/position = Vector3(0.10493601, -0.013455749, -0.006887436)
+bones/2/rotation = Quaternion(0.17786722, 0.21187237, 0.95998645, 0.043581612)
+bones/2/scale = Vector3(1.0000045, 1.000004, 1)
+bones/3/rotation = Quaternion(0.0930646, 0.91429305, -0.39242315, 0.037567217)
+bones/4/rotation = Quaternion(0.1809087, 0.8317846, -0.5193899, 0.07510407)
+bones/6/position = Vector3(-0.10493609, -0.013456106, -0.006887108)
+bones/6/rotation = Quaternion(0.25707164, 0.36872298, 0.88190144, -0.14215282)
+bones/6/scale = Vector3(0.99999934, 1, 1)
+bones/7/rotation = Quaternion(0.052122988, 0.5859695, -0.79567665, -0.144297)
+bones/8/rotation = Quaternion(0.06572435, 0.8208497, -0.5534772, 0.12469605)
+bones/10/rotation = Quaternion(0.12957619, -0.14686067, -0.15521836, 0.96827126)
+bones/11/rotation = Quaternion(0.08173678, -0.062431514, 0.035353135, 0.9940682)
+bones/12/rotation = Quaternion(0.08666615, -0.057479445, 0.0331906, 0.99402386)
+bones/13/rotation = Quaternion(0.3844285, 0.5790791, 0.6041043, -0.38979492)
+bones/14/rotation = Quaternion(-0.064258076, 0.7323586, 0.08067923, 0.6730622)
+bones/15/rotation = Quaternion(0.28689292, -0.87678635, 0.2848532, 0.26037824)
+bones/16/rotation = Quaternion(0.073232286, 0.70013946, 0.27016345, 0.65685123)
+bones/17/rotation = Quaternion(-0.11306946, -0.071211256, -0.017851017, 0.99087113)
+bones/18/rotation = Quaternion(0.021484705, 0.010788009, 0.023577934, 0.9994329)
+bones/20/rotation = Quaternion(-0.08145664, -0.09134443, -0.038389944, 0.9917395)
+bones/21/rotation = Quaternion(-0.050566074, -0.0017979634, -0.038879637, 0.99796206)
+bones/23/rotation = Quaternion(-0.20751877, -0.114432976, -0.11640577, 0.9645158)
+bones/24/rotation = Quaternion(0.027990568, 0.049586423, -0.0005207629, 0.9983774)
+bones/26/rotation = Quaternion(-0.1305311, -0.12084115, -0.050687544, 0.98274606)
+bones/27/rotation = Quaternion(-0.004884138, 0.046536315, -0.016222073, 0.9987729)
+bones/29/rotation = Quaternion(0.021848328, 0.6473574, -0.048082218, 0.76035464)
+bones/30/rotation = Quaternion(-0.04282974, 0.09738435, 0.060860716, 0.9924605)
+bones/32/rotation = Quaternion(0.47261265, -0.54554486, -0.1966313, -0.663592)
+bones/33/rotation = Quaternion(0.28467718, 0.74096954, 0.17420411, -0.5827315)
+bones/34/rotation = Quaternion(0.25027716, 0.87330484, -0.24795353, 0.33648035)
+bones/35/rotation = Quaternion(-0.051601343, -0.6084066, -0.15955327, 0.7757071)
+bones/36/rotation = Quaternion(0.050494432, 0.013908134, -0.029965878, 0.9981778)
+bones/37/rotation = Quaternion(0.18259396, -0.18764612, -0.192151, 0.94579405)
+bones/39/rotation = Quaternion(0.07144512, 0.036599852, -0.067992285, 0.99445117)
+bones/40/rotation = Quaternion(0.15713093, -0.15200649, -0.08939186, 0.9717062)
+bones/42/rotation = Quaternion(0.034195427, 0.08518074, -0.078755274, 0.99265933)
+bones/43/rotation = Quaternion(0.12194819, -0.092529826, -0.025490655, 0.9878852)
+bones/45/rotation = Quaternion(0.09015469, 0.03983126, -0.09866523, 0.99022764)
+bones/46/rotation = Quaternion(0.09293925, -0.10064344, -0.023719832, 0.99028814)
+bones/48/rotation = Quaternion(-0.13849981, -0.5847992, 0.06621705, 0.79651934)
+bones/49/rotation = Quaternion(-0.18103747, -0.27964798, -0.11102294, 0.93632066)
+bones/51/rotation = Quaternion(-0.0311814, 0.022895457, 0.051192477, 0.9979393)
+bones/52/rotation = Quaternion(-0.031181311, 0.022895776, 0.05119275, 0.9979393)
+bones/53/rotation = Quaternion(0.9961158, 0.048670776, -0.027857022, -0.06788632)
+bones/54/rotation = Quaternion(-0.20043822, -0.3177338, 0.062126696, 0.92466754)
+bones/55/rotation = Quaternion(-0.07547202, 3.1009895e-09, -1.8617369e-08, 0.997148)
+
+[node name="WalkTrajectory" type="Node3D" parent="Female181" unique_id=2057006441]
+metadata/walk_trajectory = true
+
+[node name="Waypoint_00" type="Marker3D" parent="Female181/WalkTrajectory" unique_id=1446657141]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1.1)
+metadata/trajectory_waypoint = true
+
+[node name="Waypoint_01" type="Marker3D" parent="Female181/WalkTrajectory" unique_id=1009196976]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2)
+metadata/trajectory_waypoint = true
+
+[node name="Waypoint_02" type="Marker3D" parent="Female181/WalkTrajectory" unique_id=770882807]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 5.2)
+metadata/trajectory_waypoint = true
+
+[node name="WalkAnimationPlayer" type="AnimationPlayer" parent="Female181" unique_id=1101589025]
+libraries/ = ExtResource("6_walk_anim")
+libraries/leg_wounded = ExtResource("7_walk_leg")
+libraries/wounded = ExtResource("8_walk_wounded")
+
+[node name="WalkController" type="Node" parent="Female181" unique_id=745909449]
+editor_description = "Independent controller for the 1.81 m woman. Its paths are local to Female181 and cannot drive Female190."
+script = ExtResource("5_walk")
+trajectory_path = NodePath("../WalkTrajectory")
+animation_player_path = NodePath("../WalkAnimationPlayer")
+planned_path_length_m = 6.0
+walk_speed_mps = 0.75
+auto_start_runtime = false
+
+[node name="SleepingIdleAnimationPlayer" type="AnimationPlayer" parent="." unique_id=1589245618]
+libraries/sleep = ExtResource("19_sleeping_idle")
+
+[node name="Female190" type="Node3D" parent="." unique_id=1198784883]
+transform = Transform3D(-0.9988481, 0, 0.0479839, 0, 1, 0, -0.0479839, 0, -0.9988481, -2.3504224, 0.010057628, 0.64649296)
+metadata/height_m = 1.9
+metadata/identity_sheet = "/Users/hotcat/zhouyu/mathexam/grandcherokee/1791376176067.png"
+metadata/character_role = "right comparison subject"
+
+[node name="IK_character" parent="Female190" unique_id=1665739454 instance=ExtResource("4_female190")]
+transform = Transform3D(0.056085654, -0.99763924, 0.039614663, -0.084740944, 0.03477743, 0.9957959, -0.9948228, -0.059206843, -0.08259046, 0, 0.028024673, 0)
+
+[node name="Skeleton3D" parent="Female190/IK_character" index="0" unique_id=1420299266]
+bones/0/rotation = Quaternion(0, 0, 0, 1)
+bones/2/position = Vector3(0.10904317, -0.013842225, -0.007186055)
+bones/2/rotation = Quaternion(0.10639885, 0.054284748, 0.9922129, -0.035299823)
+bones/2/scale = Vector3(1.0000008, 1.0000008, 1)
+bones/3/rotation = Quaternion(-0.047713317, 0.9949439, -0.021465374, 0.08572789)
+bones/4/rotation = Quaternion(0.06008246, 0.7275919, -0.6578489, 0.18502718)
+bones/6/position = Vector3(-0.10904318, -0.013841867, -0.007186055)
+bones/6/rotation = Quaternion(-0.1411586, 0.07211336, 0.98597914, 0.052146148)
+bones/6/scale = Vector3(0.9999997, 0.99999994, 1)
+bones/7/rotation = Quaternion(0.045435525, 0.9946483, -0.035443842, -0.08575666)
+bones/8/rotation = Quaternion(-0.084890194, 0.7219952, -0.63406867, -0.26357862)
+bones/10/position = Vector3(0.0007544409, 0.08051285, -0.057475887)
+bones/10/rotation = Quaternion(0.044442706, -0.013944617, -0.013061434, 0.9988292)
+bones/11/position = Vector3(0.00084677513, 0.07228643, 0.0072150487)
+bones/11/rotation = Quaternion(-0.008758886, -0.00058747473, 0.008487257, 0.99992543)
+bones/12/position = Vector3(0.0018725676, 0.099481426, -0.021472018)
+bones/12/rotation = Quaternion(-0.008731711, -0.0005465146, 0.008520128, 0.99992543)
+bones/13/rotation = Quaternion(-0.42038447, -0.5710667, -0.46890563, 0.52658075)
+bones/14/rotation = Quaternion(0.36062422, 0.8789589, -0.23444466, -0.20595442)
+bones/15/rotation = Quaternion(-0.069974355, -0.61961913, -0.07417787, 0.77825016)
+bones/16/rotation = Quaternion(-0.065295674, 0.75892323, -0.06715219, 0.6444087)
+bones/17/rotation = Quaternion(0.00928058, 0.15253353, -0.054546535, 0.9867482)
+bones/18/rotation = Quaternion(0.023765557, 0.014076261, 0.026210258, 0.9992748)
+bones/20/rotation = Quaternion(-0.042493057, -0.046000324, -0.02059863, 0.9978247)
+bones/21/rotation = Quaternion(0.040455885, 0.07021796, 0.016281176, 0.996578)
+bones/23/rotation = Quaternion(-0.18245657, -0.20171632, -0.044670884, 0.961262)
+bones/24/rotation = Quaternion(0.14420359, 0.11150558, 0.03147808, 0.98274153)
+bones/26/rotation = Quaternion(-0.086774126, -0.10775164, -0.016309064, 0.9902494)
+bones/27/rotation = Quaternion(0.09424999, 0.10398076, 0.023551136, 0.98982334)
+bones/29/rotation = Quaternion(-0.23531808, 0.7680445, -0.022288546, 0.5951775)
+bones/30/rotation = Quaternion(-0.08375945, 0.13965066, 0.036748603, 0.98596734)
+bones/32/rotation = Quaternion(0.5140517, -0.47473717, -0.55972075, -0.44394612)
+bones/33/rotation = Quaternion(-0.1280032, 0.955695, -0.09235998, 0.24845903)
+bones/34/rotation = Quaternion(-0.07066121, 0.6187185, 0.07486585, 0.7788386)
+bones/35/rotation = Quaternion(0.005315287, -0.754443, -0.013003486, 0.6562152)
+bones/36/rotation = Quaternion(0.043028284, -0.14980079, 0.01642505, 0.9876429)
+bones/37/rotation = Quaternion(0.027841402, -0.014991717, -0.030839313, 0.99902403)
+bones/39/rotation = Quaternion(0.0051511973, 0.02891196, -0.016142502, 0.99943835)
+bones/40/rotation = Quaternion(0.07914051, -0.095943294, -0.041024983, 0.9913872)
+bones/42/rotation = Quaternion(-0.14674889, 0.24480695, -0.010603029, 0.9583433)
+bones/43/rotation = Quaternion(0.2110751, -0.13847004, -0.05164065, 0.9662332)
+bones/45/rotation = Quaternion(-0.083666705, 0.16479123, -0.015548441, 0.98265046)
+bones/46/rotation = Quaternion(0.20470789, -0.16210921, -0.07009319, 0.9627576)
+bones/48/rotation = Quaternion(-0.34113067, -0.75358254, -0.015181314, 0.56170523)
+bones/49/rotation = Quaternion(-0.08283994, -0.059064414, -0.025134467, 0.9944934)
+bones/51/rotation = Quaternion(-0.07602229, -2.891555e-05, -0.0087221805, 0.997068)
+bones/52/rotation = Quaternion(-0.081893496, -0.0010117237, -0.008816592, 0.9966016)
+bones/53/rotation = Quaternion(0.9924017, -0.008417856, 0.0018143865, -0.1227388)
+bones/54/rotation = Quaternion(-0.026682237, 0.026176916, -0.11507714, 0.992653)
+bones/56/position = Vector3(0.1508172, 0.14861156, 0.07451935)
+bones/57/position = Vector3(0.17126538, 0.07422451, 0.025195159)
+bones/58/position = Vector3(-0.1463741, 0.1486116, 0.07451935)
+bones/59/position = Vector3(-0.16154328, 0.07422457, 0.025195152)
+bones/60/position = Vector3(-0.0032693816, 0.0564233, 0.16579446)
+bones/61/position = Vector3(-0.0027107692, 0.034889527, 0.17470068)
+
+[node name="Avatar" parent="Female190/IK_character/Skeleton3D" index="0" unique_id=1986759197]
+transform = Transform3D(1, 0, 0, -1.4901161e-08, 1, 0, 0, 9.313226e-10, 1, -0.0030069351, 0.022096395, -0.0010275841)
+
+[node name="MainCollider" parent="Female190/IK_character" index="3" unique_id=2018231258]
+transform = Transform3D(0.99842113, -0.05614258, 0.0018263608, 0.05613323, 0.9984117, 0.00483234, -0.0020947605, -0.004722192, 0.9999869, 1.1920929e-07, 0.9637473, -3.7252903e-09)
+
+[node name="WalkTrajectory" type="Node3D" parent="Female190" unique_id=830064060]
+metadata/walk_trajectory = true
+
+[node name="Waypoint_00" type="Marker3D" parent="Female190/WalkTrajectory" unique_id=964292606]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1.1)
+metadata/trajectory_waypoint = true
+
+[node name="Waypoint_01" type="Marker3D" parent="Female190/WalkTrajectory" unique_id=1640904314]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2)
+metadata/trajectory_waypoint = true
+
+[node name="Waypoint_02" type="Marker3D" parent="Female190/WalkTrajectory" unique_id=1577604461]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 5.2)
+metadata/trajectory_waypoint = true
+
+[node name="WalkAnimationPlayer" type="AnimationPlayer" parent="Female190" unique_id=1354007585]
+libraries/ = ExtResource("6_walk_anim")
+libraries/leg_wounded = ExtResource("7_walk_leg")
+libraries/wounded = ExtResource("8_walk_wounded")
+
+[node name="WalkController" type="Node" parent="Female190" unique_id=461577463]
+editor_description = "Independent controller for the 1.90 m woman. Its paths are local to Female190 and cannot drive Female181."
+script = ExtResource("5_walk")
+trajectory_path = NodePath("../WalkTrajectory")
+animation_player_path = NodePath("../WalkAnimationPlayer")
+planned_path_length_m = 6.0
+motion_source = 2
+walk_speed_mps = 0.75
+auto_start_runtime = false
+
+[editable path="MaleCarrier/Character"]
+[editable path="Female181/IK_character"]
+[editable path="Female190/IK_character"]

@@ -1756,6 +1756,13 @@ func _prepare_live_capture_copy(node: Node) -> void:
 	if node.name == "CurvePreview" and node.get_parent() != null and \
 			node.get_parent().name == "FemaleWalkTrajectory":
 		editor_only_trajectory_preview = true
+	# Height rulers and identity labels belong to the two-character comparison
+	# workspace, not to the proxy video sent to MiniMax. Hide them only in the
+	# isolated capture copy so the editor keeps its measurement aids visible.
+	var comparison_guide := str(node.name).begins_with("HeightGuide_") or \
+			node.name in ["Label_Current_OTS_Female", "Label_New_Female"]
+	if comparison_guide:
+		editor_only_trajectory_preview = true
 	if editor_only_trajectory_preview:
 		if node is Node3D:
 			(node as Node3D).visible = false

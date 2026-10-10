@@ -126,6 +126,10 @@ var _finger_seam_slider: HSlider
 var _finger_seam_value_label: Label
 var _finger_status_label: Label
 var _dock_repair_frames := 12
+var _source_pose_skeleton: Skeleton3D
+var _source_pose_modifiers: Array[SkeletonModifier3D] = []
+var _source_pose_button: Button
+var _restore_modifiers_button: Button
 
 func _enter_tree() -> void:
 	_build_panel()
@@ -148,6 +152,7 @@ func _enter_tree() -> void:
 	call_deferred("_restore_saved_bottom_dock")
 
 func _exit_tree() -> void:
+	_restore_source_pose_modifiers()
 	if scene_changed.is_connected(_on_scene_changed):
 		scene_changed.disconnect(_on_scene_changed)
 	if EditorInterface.get_selection().selection_changed.is_connected(_on_editor_selection_changed):
@@ -343,6 +348,25 @@ func _build_panel() -> void:
 	hint.tooltip_text = "Rotate a body bone or apply a complete-hand finger pose."
 	content.add_child(hint)
 
+	var modifier_row := HBoxContainer.new()
+	modifier_row.add_theme_constant_override("separation", 5)
+	content.add_child(modifier_row)
+	_source_pose_button = Button.new()
+	_source_pose_button.text = "Edit source pose"
+	_source_pose_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_source_pose_button.focus_mode = Control.FOCUS_CLICK
+	_source_pose_button.tooltip_text = "Temporarily disable active IK/orientation modifiers on the selected skeleton so Quick FK can edit its source hand pose."
+	_source_pose_button.pressed.connect(_enter_source_pose_edit)
+	modifier_row.add_child(_source_pose_button)
+	_restore_modifiers_button = Button.new()
+	_restore_modifiers_button.text = "Restore IK"
+	_restore_modifiers_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_restore_modifiers_button.focus_mode = Control.FOCUS_CLICK
+	_restore_modifiers_button.tooltip_text = "Restore the CPR IK/orientation modifiers after editing the source pose."
+	_restore_modifiers_button.pressed.connect(_restore_source_pose_modifiers)
+	_restore_modifiers_button.disabled = true
+	modifier_row.add_child(_restore_modifiers_button)
+
 	# A dropdown replaces the old vertical stack of bone buttons.  It preserves
 	# one-click access while returning most of the viewport height to the user.
 	var bone_row := HBoxContainer.new()
@@ -524,6 +548,7 @@ func _process(_delta: float) -> void:
 	var selected_skeleton := _selected_skeleton()
 	var resolved := selected_skeleton if selected_skeleton != null else _find_skeleton()
 	if resolved != _bound_skeleton:
+		_restore_source_pose_modifiers()
 		_bound_skeleton = resolved
 		_rebuild_bone_buttons()
 		_refresh_rotation_fields()
@@ -595,11 +620,13 @@ func _character_label_for_skeleton(skeleton: Skeleton3D) -> String:
 	if skeleton == null:
 		return "No rig"
 	var character := skeleton.get_parent()
-	if character != null:
-		if character.name == &"MaleCarrier":
-			return "Male"
-		if character.name == &"IK_character":
-			return "Female"
+	if character != null and character.name == &"IK_character":
+		var owner := character.get_parent()
+		if owner != null and owner.name != &"ManualCarryBlock":
+			return "Female — %s" % owner.name
+		return "Female"
+	if _find_ancestor_named(skeleton, &"MaleCarrier") != null:
+		return "Male"
 	return str(skeleton.name)
 
 func _bone_names_for_skeleton(skeleton: Skeleton3D) -> Array[StringName]:
@@ -621,6 +648,23 @@ func _selected_skeleton() -> Skeleton3D:
 		var skeleton := (node as Node).get_node_or_null("Skeleton3D") as Skeleton3D
 		if skeleton != null:
 			return skeleton
+		# Comparison and reusable character scenes commonly wrap the imported
+		# actor one level deeper (Female181/IK_character/Skeleton3D). Resolve the
+		# selected character recursively, but never search the whole scene here:
+		# selecting a character is the explicit binding choice when several rigs
+		# have the same child name.
+		var nested := _find_first_skeleton(node as Node)
+		if nested != null:
+			return nested
+	return null
+
+func _find_first_skeleton(node: Node) -> Skeleton3D:
+	for child in node.get_children():
+		if child is Skeleton3D:
+			return child as Skeleton3D
+		var nested := _find_first_skeleton(child)
+		if nested != null:
+			return nested
 	return null
 
 func _select_bone(bone_name: StringName) -> void:
@@ -651,6 +695,8 @@ func _refresh_rotation_fields() -> void:
 	_set_fields_enabled(not modifier_locked)
 	if modifier_locked:
 		_status_label.text = "Active IK owns %s. Choose a non-contact bone or bake the current IK pose first." % _selected_bone
+	elif _source_pose_skeleton == skeleton:
+		_status_label.text = "%s selected. Source-pose edit mode: active IK is temporarily disabled." % _selected_bone
 	else:
 		_status_label.text = "%s selected. Changes are captured for Cmd+S." % _selected_bone
 
@@ -750,17 +796,57 @@ func _has_active_modifiers(skeleton: Skeleton3D) -> bool:
 func _selected_bone_is_modifier_locked(skeleton: Skeleton3D) -> bool:
 	if skeleton == null or not _has_active_modifiers(skeleton):
 		return false
+	if _source_pose_skeleton == skeleton:
+		return false
 	# MaleCarrier's active modifiers are contact IK on the two arms/hands.
 	# They must not make hips, spine, legs, feet, or head uneditable in Quick FK.
 	# Female IK remains conservative: its full-body solve owns the displayed FK
 	# pose until the user explicitly bakes it.
-	var character := skeleton.get_parent()
-	if character != null and character.name == &"MaleCarrier":
+	if _find_ancestor_named(skeleton, &"MaleCarrier") != null:
 		return _selected_bone in [
 			&"LeftUpperArm", &"LeftLowerArm", &"LeftHand",
 			&"RightUpperArm", &"RightLowerArm", &"RightHand",
 		]
 	return true
+
+func _find_ancestor_named(node: Node, wanted_name: StringName) -> Node:
+	var current := node.get_parent()
+	while current != null:
+		if current.name == wanted_name:
+			return current
+		current = current.get_parent()
+	return null
+
+func _enter_source_pose_edit() -> void:
+	var skeleton := _selected_skeleton()
+	if skeleton == null:
+		_status_label.text = "Select MaleCarrier/Character/Skeleton3D first."
+		return
+	_restore_source_pose_modifiers()
+	_source_pose_skeleton = skeleton
+	for child in skeleton.get_children():
+		if child is SkeletonModifier3D and (child as SkeletonModifier3D).active:
+			_source_pose_modifiers.append(child as SkeletonModifier3D)
+			(child as SkeletonModifier3D).active = false
+	skeleton.force_update_all_bone_transforms()
+	if is_instance_valid(_restore_modifiers_button):
+		_restore_modifiers_button.disabled = false
+		_source_pose_button.disabled = true
+	_status_label.text = "Source-pose edit enabled: CPR IK temporarily disabled."
+	_refresh_rotation_fields()
+
+func _restore_source_pose_modifiers() -> void:
+	if _source_pose_skeleton != null:
+		for modifier in _source_pose_modifiers:
+			if is_instance_valid(modifier):
+				modifier.active = true
+		_source_pose_skeleton.force_update_all_bone_transforms()
+	_source_pose_modifiers.clear()
+	_source_pose_skeleton = null
+	if is_instance_valid(_restore_modifiers_button):
+		_restore_modifiers_button.disabled = true
+	if is_instance_valid(_source_pose_button):
+		_source_pose_button.disabled = false
 
 func _set_fields_enabled(enabled: bool) -> void:
 	for field in _rotation_fields:
