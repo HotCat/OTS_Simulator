@@ -25,6 +25,42 @@
     (should (equal (append (alist-get "pivot" command nil nil #'string=) nil)
                    '(0 1 2)))))
 
+(ert-deftest godot-camera-builds-forward-command-with-character-frame ()
+  (godot-camera-program-begin :target-node "CarrierTrajectory")
+  (godot-camera-g1-forward
+   :target-node "Female190"
+   :distance 2.5
+   :duration 3.0
+   :easing 'ease-in-out)
+  (let ((command (car godot-camera--commands)))
+    (should (equal (alist-get "kind" command nil nil #'string=)
+                   "g1_forward"))
+    (should (equal (alist-get "target_node" command nil nil #'string=)
+                   "Female190"))
+    (should (equal (alist-get "direction_mode" command nil nil #'string=)
+                   "character"))
+    (should (= (alist-get "distance" command nil nil #'string=) 2.5))
+    (should (= (alist-get "duration" command nil nil #'string=) 3.0))
+    (should (equal (alist-get "easing" command nil nil #'string=)
+                   "ease_in_out"))))
+
+(ert-deftest godot-camera-builds-camera-forward-command ()
+  (godot-camera-program-begin)
+  (godot-camera-g1-forward :direction 'camera :distance 1.0 :duration 2.0)
+  (let ((command (car godot-camera--commands)))
+    (should (equal (alist-get "direction_mode" command nil nil #'string=)
+                   "camera"))
+    (should-not (alist-get "target_node" command nil nil #'string=))))
+
+(ert-deftest godot-camera-builds-global-dolly-command ()
+  (godot-camera-program-begin)
+  (godot-camera-g1-global-dolly :distance 1.75 :duration 2.5)
+  (let ((command (car godot-camera--commands)))
+    (should (equal (alist-get "kind" command nil nil #'string=)
+                   "g1_global_dolly"))
+    (should (= (alist-get "distance" command nil nil #'string=) 1.75))
+    (should (= (alist-get "duration" command nil nil #'string=) 2.5))))
+
 (ert-deftest godot-camera-confirm-carrier-trajectory-follow-sends-stable-target ()
   (let (message)
     (cl-letf (((symbol-function 'godot-camera--send)
@@ -78,6 +114,22 @@
       (should (= (cdr (assoc "viewport_index" view)) 0))
       (should (equal (append (cdr (assoc "position" view)) nil)
                      '(-2.0 0.5 -2.3))))))
+
+(ert-deftest godot-camera-restore-initial-view-from-json-returns-form ()
+  (let ((godot-camera-default-target "Female181/IK_character")
+        sent)
+    (cl-letf (((symbol-function 'godot-camera--send-and-wait)
+               (lambda (type &rest properties)
+                 (setq sent (cons type properties))
+                 '(("type" . "camera.view.restored_from_motion_json")
+                   ("restore_emacs" . "(godot-camera-set-initial-view :position '(1 2 3) :quaternion '(0 0 0 1))")))))
+      (let ((result (godot-camera-restore-initial-view-from-json
+                     "/tmp/camera_motion.json"
+                     :target-node "Female181/IK_character"
+                     :viewport 1)))
+        (should (equal result
+                       "(godot-camera-set-initial-view :position '(1 2 3) :quaternion '(0 0 0 1))")))
+      (should (equal (car sent) "camera.view.restore_from_motion_json")))))
 
 (ert-deftest godot-character-initial-position-uses-ots-quaternion ()
   (let (message)

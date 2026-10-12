@@ -5,18 +5,65 @@ and `Female190/IK_character` are separate imported rigs; use each full path
 when sending a pose or selecting it for Quick FK. Their `WalkAnimationPlayer`,
 `WalkTrajectory`, and `WalkController` nodes are independent.
 
-`IkeaSampleRoom` contains only the room shell and fixed accents. Select the
+`IkeaSampleRoom` is retained as a compatibility instance for the imported
+floor only. Its inherited rug, wall, and door-frame children are explicitly
+hidden; the visible room shell is split into independently toggleable top-level
+components, so a camera can be placed outside any side without being trapped
+by the imported shell. Select the
 top-level `Bed` or `Wardrobe` node in the Scene tree and change its Position or
 Rotation in the Inspector, or use the viewport transform gizmo. Both are
 separate GLB instances with local floor-center pivots; changing one does not
 move the other or leave furniture behind in the room shell. Their editable
-Blender sources are under `assets/environments/ikea_sample_room/`.
+Blender sources are under `assets/environments/ikea_sample_room/`. For the CPR
+blocking pose, `Bed` uses the baked, unit-scale
+`ikea_bed_cpr_low.glb` asset (about 0.45 m mattress height) so the 1.90 m
+receiver's bent left calf can rest over the near edge while her torso stays on
+the floor. Its measured footprint is 1.92 m × 2.07 m and its headboard is
+0.586 m high. This avoids non-uniform instance scaling and the associated
+lighting artifacts; use `ikea_bed.glb` when a full-height bed is needed.
+
+The four wall groups are `WallWest`, `WallEast`, `WallNorth`, and `WallSouth`.
+Toggle a group in the Scene tree to open that side for a camera; its child
+meshes stay grouped so the wall, door jambs, header, and threshold are changed
+together. `WallEast` keeps the solid-door opening, and `WallNorth` keeps the
+grid-door opening. The imported `IkeaSampleRoom` remains visible only for its
+exact floor mesh; its baked rug, wall, and door-frame children are hidden by
+the room director at load and on every editor/runtime frame. Do not toggle
+those hidden children back on, or they will duplicate the independent wall
+components.
+
+`Rug` is a separate top-level GLB accessory. It starts at the original
+2.40 m × 1.60 m placement, but can now be translated, rotated, or hidden
+without editing `IkeaSampleRoom`.
+
+The imported wall children are deliberately hidden, not deleted: this prevents
+coplanar z-fighting (the blinking/mosaic artifact) while preserving the floor
+and rug from the original GLB. Therefore hiding `WallWest`, `WallEast`,
+`WallNorth`, or `WallSouth` now genuinely opens that side of the room instead
+of revealing a second baked wall underneath.
+
+The room director also reapplies this imported-shell rule every editor/runtime
+frame. Godot can discard visibility overrides on children of an imported GLB
+when the parent scene is saved, including after CPR baseline capture; the
+director therefore keeps only `Floor_5x6m` visible inside `IkeaSampleRoom` and
+leaves the four top-level wall groups as the persistent camera controls.
+
+The room `KeyLight` uses a short 12 m four-split shadow range, blended cascade
+boundaries, and conservative bias/normal-bias values. This is intentional for
+the 5 m × 6 m room: the default 100 m directional shadow range wastes shadow
+resolution and can appear as tiled/mosaic lighting in the editor viewport.
 
 Select `GridDoorHinge` or `SolidDoorHinge` and adjust **Opening Angle Degrees**
 in the Inspector. Each leaf opens inward independently from 0° (closed) to
 120°. The former bedside table and lamp/shade have been removed. `Ceiling` is
 a separate top-level instance hidden by default for overhead camera freedom;
-toggle its visibility on for captures where the upper room is in view. If the
+the grid-glazed door is on the north wall. The original south-wall opening is
+closed by a replacement wall panel, while the north wall is rebuilt as two
+side panels plus a header around `GridDoorHinge`, so the door leaf sits in a
+real wall opening rather than in front of a solid wall.
+`Ceiling` is a separate top-level instance hidden by default for overhead
+camera freedom; toggle its visibility on for captures where the upper room is
+in view. If the
 ceiling stays hidden in an H3 guide video, explicitly describe a normal
 enclosed 2.70 m room ceiling in the prompt and, for upward-looking shots,
 provide a ceiling-on still as an additional reference. H3 may infer it, but

@@ -78,8 +78,17 @@ var _cpr_rest_bones: Dictionary = {}
 
 func _ready() -> void:
 	set_process(true)
+	_enforce_imported_room_shell_visibility()
 
 func _process(delta: float) -> void:
+	# IkeaSampleRoom is an imported GLB instance. Godot may discard visibility
+	# overrides for children of an imported instance when the parent scene is
+	# saved, so do not rely on serialized child overrides for the shell. The
+	# authored top-level WallWest/WallEast/WallNorth/WallSouth nodes are the
+	# actual camera-facing wall controls; the imported instance contributes only
+	# its floor. Reapply this invariant every editor/runtime frame so reopening
+	# the scene cannot resurrect duplicate coplanar walls and door frames.
+	_enforce_imported_room_shell_visibility()
 	if _female181_sleep_playing:
 		var sleep_player := get_node_or_null("SleepingIdleAnimationPlayer") as AnimationPlayer
 		if sleep_player != null and sleep_player.has_animation(&"sleep/sleeping_idle"):
@@ -94,6 +103,20 @@ func _process(delta: float) -> void:
 				_servo_playing = false
 	elif _cpr_mode and _cpr_playing and not _capture_fixed_step_active:
 		_advance_cpr(delta)
+
+func _enforce_imported_room_shell_visibility() -> void:
+	var shell := get_node_or_null("IkeaSampleRoom") as Node3D
+	if shell == null:
+		return
+	for child in shell.get_children():
+		if not child is Node3D:
+			continue
+		# The imported GLB's only retained geometry is the exact floor mesh. Its
+		# baked walls, door frames, thresholds, and rug are duplicated by the
+		# independently toggleable sibling components in this scene.
+		var should_be_visible := str(child.name) == "Floor_5x6m"
+		if (child as Node3D).visible != should_be_visible:
+			(child as Node3D).visible = should_be_visible
 
 func _servo_controller() -> Node:
 	return get_node_or_null("CPRServoController")

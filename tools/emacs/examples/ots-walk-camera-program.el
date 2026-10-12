@@ -219,12 +219,25 @@
   (godot-camera-program-begin
    :name "ikea-cpr-9s"
    :target-node "OrbitPivot"
+   ;; :target-node "Female190"
    :viewport 1
    :loop nil)
 
   (godot-camera-g4 :seconds 0.1)
+
+  ;; (godot-camera-g1-forward
+  ;;  :target-node "Female190"
+  ;;  :distance 0.30
+  ;;  :duration 6.0
+  ;;  :easing 'smooth)
+
+  (godot-camera-g1-global-dolly
+   :distance 0.35
+   :duration 5.0
+   :easing 'smooth)
+
   (godot-camera-g3-orbit
-   :degrees 30.88
+   :degrees 10.88
    :pivot '(0.0 1.2 0.0) ; OrbitPivot is already at chest height.
    :duration 7.0
    :easing 'smooth)
@@ -256,3 +269,9 @@
  :viewport 1
  :position '(-2.383820534 0.590367615 -2.315844059)
  :quaternion '(-0.436212540 -0.369110435 -0.233606294 0.786704659))
+
+
+(godot-camera-restore-initial-view-from-json
+ "/Users/hotcat/Downloads/Godot-4-Advanced Locomotion Tutorial/ik-demo-4.6/renders/ots_quickview/2026-10-10T08-23-27-camera-motion/camera_motion.json"
+ :target-node "Female181/IK_character"
+ :viewport 1)

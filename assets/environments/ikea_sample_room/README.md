@@ -1,7 +1,8 @@
 # IKEA sample room blocking asset
 
-The editable Blender sources and Godot imports are split into six independent
-assets: `ikea_sample_room.blend`/`.glb` for the architectural shell and rug,
+The editable Blender sources and Godot imports are split into seven independent
+assets: `ikea_sample_room.blend`/`.glb` for the architectural floor shell,
+`ikea_rug.glb` for the separately movable rug,
 `ikea_ceiling.blend`/`.glb` for the optional ceiling,
 `ikea_grid_door_leaf.blend`/`.glb` and `ikea_solid_door_leaf.blend`/`.glb`
 for the two adjustable doors, plus `ikea_bed.blend`/`.glb` and
@@ -10,7 +11,7 @@ layout proxy for H3 rather than a finished interior asset:
 
 - clear floor plan: 5.0 m × 6.0 m = 30 m²;
 - wall height: 2.70 m, wall thickness: 0.12 m;
-- glazed grid door on the south wall: 0.90 m × 2.10 m;
+- glazed grid door on the north wall: 0.90 m × 2.10 m; the former south-wall opening is filled by a replacement wall panel;
 - solid interior door on the east wall: 0.90 m × 2.10 m;
 - bed envelope: 2.07 m × 1.92 m, headboard height 1.01 m;
 - wardrobe envelope: 0.82 m × 0.60 m × 1.94 m.

@@ -71,6 +71,8 @@
 
 (defvar-local godot-pose--stream-process nil)
 (defvar-local godot-pose--last-response nil)
+(defvar-local godot-pose--save-after-capture nil
+  "When non-nil, save this pose document after the pending capture arrives.")
 
 (defvar godot-pose-mode-map
   (let ((map (make-sparse-keymap)))
@@ -78,6 +80,7 @@
     (define-key map (kbd "C-c C-a") #'godot-pose-select-active)
     (define-key map (kbd "C-c C-e") #'godot-pose-send-active)
     (define-key map (kbd "C-c C-d") #'godot-pose-dump-editor-pose)
+    (define-key map (kbd "C-c C-F") #'godot-pose-dump-editor-pose-to-file)
     (define-key map (kbd "C-c C-x") #'godot-pose-delete-profile)
     (define-key map (kbd "C-c C-t") #'godot-pose-send-active-to-runtime)
     (define-key map (kbd "C-c C-s") #'godot-pose-save-to-project)
@@ -343,8 +346,11 @@ ENDPOINT-KEY defaults to `endpoint', the Godot editor endpoint."
 (defun godot-pose-dump-editor-pose (pose-name)
   "Capture the current Godot editor pose as POSE-NAME in this document.
 
-The response appends a complete 56-bone FK base, all IK controls, and modifier
-states to `poses', makes POSE-NAME active, and leaves the buffer modified for
+The response appends every FK bone in the live target skeleton, all IK
+controls, and modifier states to `poses', makes POSE-NAME active, and updates
+the document's top-level `rig.bones' hierarchy when the server supplies it.
+This is important for characters with optional deformation bones, such as
+Female190's CPR breast and abdomen bones.  The buffer is left modified for
 `C-c C-s'.  It does not save or alter the .tscn scene on disk."
   (interactive
    (list (read-string "Name for current editor pose: "
@@ -375,24 +381,57 @@ states to `poses', makes POSE-NAME active, and leaves the buffer modified for
       "\n"))
     (message "Requested editor pose %s from Godot…" pose-name)))
 
+(defun godot-pose-dump-editor-pose-to-file (output-path pose-name)
+  "Capture POSE-NAME into OUTPUT-PATH and save after the asynchronous reply.
+
+OUTPUT-PATH must be an existing or valid .gdpose document whose `character'
+block points at the intended live character.  The command opens that document,
+requests the capture from the running Godot editor, updates its rig metadata,
+and saves it when the reply arrives."
+  (interactive
+   (let* ((document (godot-pose--parse-document))
+          (project-root (godot-pose--project-root document))
+          (default-directory project-root)
+          (output (read-file-name
+                   "Pose output file: "
+                   (expand-file-name "poses/" project-root)
+                   nil nil "female-poses.gdpose"))
+          (name (read-string "Name for current editor pose: "
+                             (format-time-string "editor_capture_%Y%m%d_%H%M%S"))))
+     (list output name)))
+  (find-file (expand-file-name output-path))
+  (setq godot-pose--save-after-capture t)
+  (godot-pose-dump-editor-pose pose-name))
+
 (defun godot-pose--receive-capture (process reply)
   "Insert a pose.capture REPLY associated with PROCESS."
   (let* ((pending (process-get process 'godot-pose-capture-request))
          (request-id (godot-pose--get "request_id" reply))
          (pose-name (and pending (cdr pending)))
-         (pose (godot-pose--get "pose" reply)))
+         (pose (godot-pose--get "pose" reply))
+         (rig-bones (godot-pose--get "rig_bones" reply)))
     (when (and pending
                (equal request-id (car pending))
                (stringp pose-name)
                (listp pose))
       (atomic-change-group
         (godot-pose--append-pose pose-name pose)
+        (when (and (listp rig-bones) rig-bones)
+          (godot-pose--replace-rig-bones rig-bones))
         (godot-pose-select-active pose-name))
       (process-put process 'godot-pose-capture-request nil)
-      (message "Dumped %s: %s bones, %s IK controls; C-c C-s to save"
-               pose-name
-               (godot-pose--get "bones_captured" reply "?")
-               (godot-pose--get "controls_captured" reply "?")))))
+      (if godot-pose--save-after-capture
+          (progn
+            (setq godot-pose--save-after-capture nil)
+            (save-buffer)
+            (message "Dumped and saved %s: %s bones, %s IK controls"
+                     pose-name
+                     (godot-pose--get "bones_captured" reply "?")
+                     (godot-pose--get "controls_captured" reply "?")))
+        (message "Dumped %s: %s bones, %s IK controls; C-c C-s to save"
+                 pose-name
+                 (godot-pose--get "bones_captured" reply "?")
+                 (godot-pose--get "controls_captured" reply "?"))))))
 
 (defun godot-pose--pretty-json (value)
   "Return VALUE as consistently indented JSON."
@@ -430,6 +469,38 @@ states to `poses', makes POSE-NAME active, and leaves the buffer modified for
           ;; Insert before the closing brace; inserting after it creates a
           ;; valid root-level property that validation cannot select.
           (insert ",\n" entry))))))
+
+(defun godot-pose--replace-rig-bones (rig-bones)
+  "Replace the document's top-level `rig.bones' array with RIG-BONES.
+
+RIG-BONES is the hierarchy returned by the live Godot Skeleton3D.  Keeping
+this metadata synchronized prevents a later pose apply/retarget operation from
+silently treating optional bones as unknown, while leaving all existing pose
+profiles untouched."
+  (save-excursion
+    (goto-char (point-min))
+    (unless (re-search-forward
+             "\"rig\"[[:space:]]*:[[:space:]]*{" nil t)
+      (user-error "Cannot find the rig object"))
+    (let* ((rig-open (1- (point)))
+           (rig-end (scan-sexps rig-open 1)))
+      (unless rig-end
+        (user-error "Cannot find the end of the rig object"))
+      (goto-char rig-open)
+      (unless (re-search-forward
+               "\"bones\"[[:space:]]*:[[:space:]]*\\[" rig-end t)
+        (user-error "Cannot find rig.bones array"))
+      (let* ((array-open (1- (point)))
+             (array-end (scan-sexps array-open 1))
+             (json (godot-pose--pretty-json rig-bones))
+             ;; The document uses two-space JSON indentation.  The array is
+             ;; nested under rig, so add four spaces to subsequent lines.
+             (formatted (replace-regexp-in-string "\n" "\n    " json)))
+        (unless array-end
+          (user-error "Cannot find the end of rig.bones array"))
+        (delete-region array-open array-end)
+        (goto-char array-open)
+        (insert formatted)))))
 
 (defun godot-pose-delete-profile (pose-name &optional skip-confirmation)
   "Delete POSE-NAME from the current pose document.

@@ -57,6 +57,7 @@ shot. Important pose-document commands are:
 | `C-c C-a` | Select the active named pose profile. |
 | `C-c C-e` | Send the active pose to the open Godot editor scene. |
 | `C-c C-d` | Capture the editor's currently evaluated pose into the document. |
+| `M-x godot-pose-dump-editor-pose-to-file` | Open a pose document, capture the live editor pose, update its complete Skeleton3D hierarchy, and save it automatically. |
 | `C-c C-x` | Select and delete a pose profile, with confirmation and undo support. |
 | `C-c C-t` | Send the active pose to the running game preview. |
 | `C-c C-r` | Start the configured Godot preview scene. |

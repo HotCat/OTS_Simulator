@@ -212,6 +212,33 @@ rotation_degrees fallback is retained for hand-authored legacy programs.")
     (process-send-string (godot-camera--ensure-connection)
                          (concat (json-encode message) "\n"))))
 
+(defun godot-camera--send-and-wait (type &rest properties)
+  "Send TYPE and synchronously return its matching JSON response.
+
+This is intentionally separate from `godot-camera--send', whose fire-and-
+forget behavior is important for high-frequency shot controls.  It is used
+only by commands that need a computed value back from the Godot editor, such
+as extracting a character-relative camera pose from recorded metadata."
+  (let* ((request-id (godot-camera--request-id))
+         (message `(("protocol" . "godot-pose-stream")
+                    ("version" . 1)
+                    ("type" . ,type)
+                    ("request_id" . ,request-id)
+                    ,@properties))
+         (process (godot-camera--ensure-connection))
+         (deadline (+ (float-time) 5.0))
+         (reply nil))
+    (process-send-string process (concat (json-encode message) "\n"))
+    (while (and (< (float-time) deadline) (null reply))
+      (accept-process-output process 0.05)
+      (let ((candidate godot-camera--last-response))
+        (when (and (listp candidate)
+                   (equal (alist-get "request_id" candidate nil nil #'string=)
+                          request-id))
+          (setq reply candidate))))
+    (or reply
+        (user-error "Timed out waiting for Godot response to %s" type))))
+
 (defun godot-camera--vector3 (value label)
   "Convert three-number VALUE to a JSON vector, identifying it as LABEL."
   (unless (and (sequencep value) (= (length value) 3)
@@ -364,15 +391,49 @@ editor viewport number."
   (godot-camera--send "camera.view.restore")
   (message "Asked Godot to restore the initial camera view"))
 
+;;;###autoload
+(cl-defun godot-camera-restore-initial-view-from-json
+    (file &key target-node (viewport 1))
+  "Restore frame zero from FILE and return its reusable Emacs form.
+
+FILE is a recorded `camera_motion.json'.  Godot reads the global frame-zero
+sample and converts it into the current scene target's local coordinate space,
+because the metadata does not contain the target's full rotation.  The camera
+is restored immediately, and the returned string is copied to the clipboard;
+it has the form `(godot-camera-set-initial-view :position ... :quaternion ...)'.
+TARGET-NODE optionally identifies the character used as the relative coordinate
+frame; when omitted, Godot uses the female actor path recorded in FILE.
+VIEWPORT is the human-facing 1-based editor viewport number."
+  (interactive (list (read-file-name "camera_motion.json: ")))
+  (unless (and (integerp viewport) (<= 1 viewport 4))
+    (user-error "Viewport must be an integer from 1 through 4"))
+  (let* ((properties (append
+                      `(("path" . ,file))
+                      (when target-node `(("target_node" . ,target-node)))
+                      `(("viewport_index" . ,(1- viewport)))))
+         (reply (apply #'godot-camera--send-and-wait
+                       "camera.view.restore_from_motion_json"
+                       properties))
+         (type (alist-get "type" reply nil nil #'string=))
+         (snippet (alist-get "restore_emacs" reply nil nil #'string=)))
+    (when (equal type "error")
+      (user-error "Godot could not restore camera view: %s"
+                  (alist-get "error" reply "unknown error" nil #'string=)))
+    (unless (stringp snippet)
+      (user-error "Godot returned no reusable initial-view form"))
+    (kill-new snippet)
+    (message "Restored frame-zero camera view; copied: %s" snippet)
+    snippet))
+
 (cl-defun godot-camera-g0 (&key (x 0.0) (y 0.0) (z 0.0)
                                  rotation-degrees)
   "Append an instantaneous move to absolute work offset X Y Z."
   (godot-camera--append-command
-   (append `(("kind" . "g0") ("to" . [,x ,y ,z]))
-           (when rotation-degrees
-             `(("rotation_degrees" .
-                ,(godot-camera--vector3 rotation-degrees
-                                        "rotation-degrees")))))))
+   (append
+    `(("kind" . "g0") ("to" . [,x ,y ,z]))
+    (when rotation-degrees
+      `(("rotation_degrees" .
+         ,(godot-camera--vector3 rotation-degrees "rotation-degrees")))))))
 
 (cl-defun godot-camera-g1
     (&key (x 0.0) (y 0.0) (z 0.0) duration feed-mps
@@ -381,15 +442,69 @@ editor viewport number."
 
 Specify DURATION in seconds or omit it to derive time from FEED-MPS."
   (godot-camera--append-command
-   (append `(("kind" . "g1")
-             ("to" . [,x ,y ,z])
-             ("easing" . ,(godot-camera--easing-name easing)))
-           (when duration `(("duration" . ,duration)))
-           (when feed-mps `(("feed_mps" . ,feed-mps)))
-           (when rotation-degrees
-             `(("rotation_degrees" .
-                ,(godot-camera--vector3 rotation-degrees
-                                        "rotation-degrees")))))))
+   (append
+    `(("kind" . "g1")
+      ("to" . [,x ,y ,z])
+      ("easing" . ,(godot-camera--easing-name easing)))
+    (when duration `(("duration" . ,duration)))
+    (when feed-mps `(("feed_mps" . ,feed-mps)))
+    (when rotation-degrees
+      `(("rotation_degrees" .
+         ,(godot-camera--vector3 rotation-degrees "rotation-degrees")))))))
+
+(cl-defun godot-camera-g1-forward
+    (&key (distance 1.0) duration feed-mps (easing 'smooth)
+          target-node (direction 'character) rotation-degrees)
+  "Append a linear move along a forward direction.
+
+With the default DIRECTION of `character', the forward direction is the
+selected TARGET-NODE's local -Z axis, matching Godot's forward convention.
+TARGET-NODE is resolved when the camera program is loaded, so it may be a
+scene-relative path such as \"Female190\" or \"Female190/Skeleton3D\".  Use
+DIRECTION `camera' to move along the camera's current optical -Z direction;
+TARGET-NODE may then be omitted.  The camera orientation is preserved unless
+ROTATION-DEGREES is supplied.  DISTANCE may be negative to move backwards.
+
+The resulting endpoint is still compiled in the camera program's work
+coordinate, so the program's normal TARGET-NODE continues to control camera
+following while this command chooses the direction frame independently."
+  (unless (numberp distance)
+    (user-error ":distance must be a number"))
+  (let ((direction-name (godot-camera--easing-name direction)))
+    (unless (member direction-name '("character" "camera"))
+      (user-error ":direction must be either 'character or 'camera"))
+    (godot-camera--append-command
+     (append
+      `(("kind" . "g1_forward")
+        ("distance" . ,distance)
+        ("direction_mode" . ,direction-name)
+        ("easing" . ,(godot-camera--easing-name easing)))
+      (when target-node `(("target_node" . ,target-node)))
+      (when duration `(("duration" . ,duration)))
+      (when feed-mps `(("feed_mps" . ,feed-mps)))
+      (when rotation-degrees
+        `(("rotation_degrees" .
+           ,(godot-camera--vector3 rotation-degrees "rotation-degrees"))))))))
+
+(cl-defun godot-camera-g1-global-dolly
+    (&key (distance 1.0) duration feed-mps (easing 'smooth))
+  "Append a world-space dolly along the camera's optical axis.
+
+The rail direction is sampled from the camera's current global -Z axis when
+Godot loads the program.  The rail remains fixed in global coordinates while
+the camera moves, so character turns or a moving follow target cannot rotate
+the dolly direction.  The camera orientation is preserved, like a physical
+camera mounted on a straight rail aligned with its lens.  DISTANCE may be
+negative to dolly backwards."
+  (unless (numberp distance)
+    (user-error ":distance must be a number"))
+  (godot-camera--append-command
+   (append
+    `(("kind" . "g1_global_dolly")
+      ("distance" . ,distance)
+      ("easing" . ,(godot-camera--easing-name easing)))
+    (when duration `(("duration" . ,duration)))
+    (when feed-mps `(("feed_mps" . ,feed-mps))))))
 
 (cl-defun godot-camera-g5
     (&key (x 0.0) (y 0.0) (z 0.0) control1 control2 duration feed-mps

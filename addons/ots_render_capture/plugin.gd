@@ -83,6 +83,8 @@ var _camera_motion_program = CameraMotionProgram.new()
 var _camera_program_loaded := false
 var _camera_program_playing := false
 var _camera_program_elapsed := 0.0
+var _camera_program_global_transform_valid := false
+var _camera_program_global_transform := Transform3D.IDENTITY
 var _orbit_reference: Marker3D
 var _orbit_selection_attempts := 0
 var _camera_coordinate_status: Label
@@ -199,6 +201,101 @@ func restore_editor_camera_initial_view() -> Dictionary:
 	return result
 
 
+func restore_editor_camera_initial_view_from_motion_json(
+	path: String,
+	target_node_name: String = "",
+	viewport_index: int = 0
+) -> Dictionary:
+	"""Restore frame zero from a recorded camera_motion.json file.
+
+	The recorder stores camera samples in global space, while the reusable
+	initial-view API intentionally stores a character-relative transform.  The
+	JSON also stores the target's position but not its full rotation, so this
+	conversion must happen in the Godot editor against the currently edited
+	scene's target node.  The returned `restore_emacs` string is the exact
+	quaternion-safe form that can be pasted into a shot file.
+	"""
+	var scene_root := EditorInterface.get_edited_scene_root()
+	if scene_root == null:
+		return {"ok": false, "error": "edited_scene_missing"}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {"ok": false, "error": "camera_motion_json_open_failed", "path": path}
+	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not parsed is Dictionary:
+		return {"ok": false, "error": "camera_motion_json_not_an_object", "path": path}
+	var metadata := parsed as Dictionary
+	var samples_value = metadata.get("camera_samples", null)
+	if not samples_value is Array or (samples_value as Array).is_empty():
+		return {"ok": false, "error": "camera_motion_samples_missing", "path": path}
+	var sample_value = (samples_value as Array)[0]
+	if not sample_value is Dictionary:
+		return {"ok": false, "error": "camera_motion_first_sample_invalid", "path": path}
+	var sample := sample_value as Dictionary
+	var position_value = sample.get("position", null)
+	var quaternion_value = sample.get("quaternion_xyzw", null)
+	if not position_value is Array or (position_value as Array).size() < 3:
+		return {"ok": false, "error": "camera_motion_position_missing", "path": path}
+	if not quaternion_value is Array or (quaternion_value as Array).size() < 4:
+		return {"ok": false, "error": "camera_motion_quaternion_missing", "path": path}
+	var requested_target := target_node_name
+	if requested_target.is_empty():
+		var actors_value = metadata.get("actors", {})
+		if actors_value is Dictionary:
+			requested_target = str((actors_value as Dictionary).get(
+				"female", _default_female_path_string()
+			))
+	if requested_target.is_empty():
+		requested_target = _default_female_path_string()
+	var target_path := _resolve_requested_character_path(scene_root, NodePath(requested_target))
+	var character := scene_root.get_node_or_null(target_path) as Node3D
+	if character == null:
+		return {
+			"ok": false,
+			"error": "camera_follow_target_missing",
+			"target_node": str(target_path),
+			"path": path,
+		}
+	var camera_transform := Transform3D(
+		Basis(Quaternion(
+			float(quaternion_value[0]), float(quaternion_value[1]),
+			float(quaternion_value[2]), float(quaternion_value[3])
+		).normalized()),
+		Vector3(float(position_value[0]), float(position_value[1]), float(position_value[2]))
+	)
+	var relative := character.global_transform.affine_inverse() * camera_transform
+	var relative_position := relative.origin
+	var relative_quaternion := relative.basis.get_rotation_quaternion()
+	var view := {
+		"position": [relative_position.x, relative_position.y, relative_position.z],
+		"quaternion_xyzw": [
+			relative_quaternion.x, relative_quaternion.y,
+			relative_quaternion.z, relative_quaternion.w,
+		],
+	}
+	view["target_node"] = str(target_path)
+	view["viewport_index"] = clampi(viewport_index, 0, 3)
+	var set_result := set_editor_camera_initial_view(view)
+	if not bool(set_result.get("ok", false)):
+		return set_result
+	var restore_emacs := "(godot-camera-set-initial-view :position '(%.9f %.9f %.9f) :quaternion '(%.9f %.9f %.9f %.9f))" % [
+		relative_position.x, relative_position.y, relative_position.z,
+		relative_quaternion.x, relative_quaternion.y,
+		relative_quaternion.z, relative_quaternion.w,
+	]
+	var result := set_result.duplicate(true)
+	result.merge({
+		"source_path": path,
+		"sample_frame": int(sample.get("frame", 0)),
+		"sample_time_seconds": float(sample.get("time_seconds", 0.0)),
+		"camera_global_position": sample.get("position"),
+		"camera_global_quaternion_xyzw": sample.get("quaternion_xyzw"),
+		"restore_emacs": restore_emacs,
+	}, true)
+	return result
+
+
 func _apply_camera_relative_transform(relative: Transform3D, character: Node3D, viewport_index: int) -> Dictionary:
 	var editor_viewport := EditorInterface.get_editor_viewport_3d(viewport_index)
 	var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
@@ -290,6 +387,7 @@ func confirm_editor_camera_follow(options: Dictionary = {}) -> Dictionary:
 	_camera_follow_active = true
 	_camera_program_loaded = false
 	_camera_program_playing = false
+	_camera_program_global_transform_valid = false
 	if _recording_fixed_step_active:
 		_recording_camera_program_was_playing = false
 	_camera_program_elapsed = 0.0
@@ -348,8 +446,14 @@ func load_editor_camera_program(program: Dictionary, auto_play: bool = true) -> 
 		})
 		if not bool(confirm_result.get("ok", false)):
 			return confirm_result
+	var prepared_program_result := _prepare_camera_program(program, scene_root)
+	if not bool(prepared_program_result.get("ok", false)):
+		return prepared_program_result
+	var prepared_program := prepared_program_result.get("program", program) as Dictionary
 	var result := _camera_motion_program.configure(
-		program, _camera_follow_base_relative_transform
+		prepared_program,
+		_camera_follow_base_relative_transform,
+		_camera_follow_target_transform(_camera_follow_character)
 	) as Dictionary
 	if not bool(result.get("ok", false)):
 		return result
@@ -363,9 +467,7 @@ func load_editor_camera_program(program: Dictionary, auto_play: bool = true) -> 
 		_camera_program_playing = false
 	else:
 		_camera_program_playing = auto_play
-	_camera_follow_relative_transform = (_camera_motion_program.sample(0.0) as Dictionary).get(
-		"transform", _camera_follow_base_relative_transform
-	) as Transform3D
+	_apply_camera_program_sample(_camera_motion_program.sample(0.0) as Dictionary)
 	var state := "playing" if auto_play else "loaded"
 	var status := "%s %s: %d commands, %.3f seconds%s." % [
 		"Playing" if auto_play else "Loaded",
@@ -378,6 +480,94 @@ func load_editor_camera_program(program: Dictionary, auto_play: bool = true) -> 
 	if is_instance_valid(_status_label):
 		_status_label.text = status
 	return result.merged({"state": state}, true)
+
+
+func _prepare_camera_program(program: Dictionary, scene_root: Node) -> Dictionary:
+	"""Resolve per-command character-local camera directions.
+
+	Camera programs are authored in the moving program target's work space.
+	`g1_forward` can nevertheless name a different character whose local -Z
+	axis supplies the direction.  Resolve that axis once at program load and
+	store it in program-target space; the motion-program compiler can then
+	remain a deterministic, scene-independent RefCounted.
+	"""
+	var prepared := program.duplicate(true)
+	var commands_value = prepared.get("commands", null)
+	if not commands_value is Array:
+		return {"ok": false, "error": "commands_must_be_array"}
+	var program_character := _camera_follow_character as Node3D
+	if program_character == null:
+		return {"ok": false, "error": "camera_follow_target_missing"}
+	var program_transform := _camera_follow_target_transform(program_character)
+	var commands := commands_value as Array
+	for index in commands.size():
+		var command_value = commands[index]
+		if not command_value is Dictionary:
+			return {"ok": false, "error": "command_must_be_object", "index": index}
+		var command := command_value as Dictionary
+		var kind := str(command.get("kind", "")).to_lower()
+		if kind not in ["g1_forward", "forward"]:
+			continue
+		var target_name := str(command.get("target_node", ""))
+		var direction_mode := str(command.get(
+			"direction_mode", "character" if not target_name.is_empty() else "camera"
+		)).to_lower()
+		if direction_mode in ["camera", "view", "camera_forward"]:
+			# No target means camera-relative forward; the motion program resolves
+			# -start.basis.z from the current camera orientation itself.  This
+			# also allows an explicit `direction_mode: camera` with a target
+			# supplied only as authoring metadata.
+			continue
+		if direction_mode not in ["character", "character_forward"]:
+			return {
+				"ok": false,
+				"error": "camera_forward_direction_mode_invalid",
+				"direction_mode": direction_mode,
+				"index": index,
+			}
+		if target_name.is_empty():
+			return {
+				"ok": false,
+				"error": "camera_forward_target_missing",
+				"index": index,
+			}
+		var target_path := _resolve_requested_character_path(scene_root, NodePath(target_name))
+		var target_node := scene_root.get_node_or_null(target_path) as Node3D
+		if target_node == null:
+			return {
+				"ok": false,
+				"error": "camera_forward_target_missing",
+				"target_node": str(target_path),
+				"index": index,
+			}
+		var target_transform := _camera_follow_target_transform(target_node)
+		var direction_global := -target_transform.basis.z
+		var direction_local := program_transform.basis.inverse() * direction_global
+		command["direction_local"] = [direction_local.x, direction_local.y, direction_local.z]
+		command["resolved_target_node"] = str(target_path)
+		commands[index] = command
+	prepared["commands"] = commands
+	return {"ok": true, "program": prepared}
+
+
+func _apply_camera_program_sample(sample: Dictionary) -> void:
+	_camera_follow_relative_transform = sample.get(
+		"transform", _camera_follow_relative_transform
+	) as Transform3D
+	var global_value = sample.get("global_transform", null)
+	if global_value is Transform3D:
+		_camera_program_global_transform = global_value as Transform3D
+		_camera_program_global_transform_valid = true
+	else:
+		_camera_program_global_transform_valid = false
+
+
+func _apply_camera_transform_to_editor_camera(editor_camera: Camera3D, delta: float = -1.0) -> void:
+	if _camera_program_global_transform_valid:
+		editor_camera.global_transform = _camera_program_global_transform
+	else:
+		editor_camera.global_transform = _camera_follow_target_transform(_camera_follow_character, delta) \
+			* _camera_follow_relative_transform
 
 
 func play_editor_camera_program(restart: bool = false) -> Dictionary:
@@ -410,10 +600,9 @@ func reset_editor_camera_program() -> Dictionary:
 	_camera_program_elapsed = 0.0
 	_camera_program_playing = false
 	_camera_follow_relative_transform = _camera_follow_base_relative_transform
+	_camera_program_global_transform_valid = false
 	if _camera_program_loaded:
-		_camera_follow_relative_transform = (_camera_motion_program.sample(0.0) as Dictionary).get(
-			"transform", _camera_follow_base_relative_transform
-		) as Transform3D
+		_apply_camera_program_sample(_camera_motion_program.sample(0.0) as Dictionary)
 	var status := "Camera program reset to work zero."
 	editor_camera_program_state_changed.emit("reset", status)
 	return {"ok": true, "state": "reset", "time_seconds": 0.0}
@@ -424,6 +613,7 @@ func clear_editor_camera_program() -> Dictionary:
 	_camera_program_playing = false
 	_camera_program_elapsed = 0.0
 	_camera_follow_relative_transform = _camera_follow_base_relative_transform
+	_camera_program_global_transform_valid = false
 	var status := "Camera program cleared; fixed follow remains active."
 	editor_camera_program_state_changed.emit("cleared", status)
 	return {"ok": true, "state": "cleared"}
@@ -466,17 +656,14 @@ func _process(delta: float) -> void:
 	if _camera_program_loaded and _camera_program_playing:
 		_camera_program_elapsed += maxf(0.0, delta)
 		var program_sample := _camera_motion_program.sample(_camera_program_elapsed) as Dictionary
-		_camera_follow_relative_transform = program_sample.get(
-			"transform", _camera_follow_relative_transform
-		) as Transform3D
+		_apply_camera_program_sample(program_sample)
 		if bool(program_sample.get("finished", false)) and not _camera_motion_program.loop:
 			_camera_program_elapsed = _camera_motion_program.duration_seconds
 			_camera_program_playing = false
 			editor_camera_program_state_changed.emit(
 				"finished", "Camera program finished; holding its final work coordinate."
 			)
-	editor_camera.global_transform = _camera_follow_target_transform(_camera_follow_character, delta) \
-		* _camera_follow_relative_transform
+	_apply_camera_transform_to_editor_camera(editor_camera, delta)
 	if refresh_calibration:
 		_update_camera_coordinate_panel()
 
@@ -1634,9 +1821,7 @@ func _advance_fixed_step_capture(delta_seconds: float) -> void:
 	if _recording_camera_program_was_playing and _camera_program_loaded:
 		_camera_program_elapsed += maxf(0.0, delta_seconds)
 		var program_sample := _camera_motion_program.sample(_camera_program_elapsed) as Dictionary
-		_camera_follow_relative_transform = program_sample.get(
-			"transform", _camera_follow_relative_transform
-		) as Transform3D
+		_apply_camera_program_sample(program_sample)
 		if bool(program_sample.get("finished", false)) and not _camera_motion_program.loop:
 			_camera_program_elapsed = _camera_motion_program.duration_seconds
 			_recording_camera_program_was_playing = false
@@ -1647,8 +1832,7 @@ func _advance_fixed_step_capture(delta_seconds: float) -> void:
 		var editor_viewport := EditorInterface.get_editor_viewport_3d(_camera_follow_viewport_index)
 		var editor_camera := editor_viewport.get_camera_3d() if editor_viewport != null else null
 		if editor_camera != null:
-			editor_camera.global_transform = _camera_follow_target_transform(_camera_follow_character, delta_seconds) \
-				* _camera_follow_relative_transform
+			_apply_camera_transform_to_editor_camera(editor_camera, delta_seconds)
 			# Apply the transform for the cutoff frame first, then release follow.
 			# stop_editor_camera_follow() intentionally leaves the editor camera at
 			# its current transform, so subsequent recorded frames are locked off

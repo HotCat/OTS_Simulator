@@ -22,6 +22,7 @@ const CAMERA_CAPABILITIES: Array[String] = [
 	"camera.follow.stop",
 	"camera.view.set",
 	"camera.view.restore",
+	"camera.view.restore_from_motion_json",
 	"camera.program.load",
 	"camera.program.play",
 	"camera.program.pause",
@@ -546,6 +547,16 @@ func _handle_camera_message(message_type: String, message: Dictionary) -> Dictio
 			result = service.call("set_editor_camera_initial_view", view_value) as Dictionary
 		"camera.view.restore":
 			result = service.call("restore_editor_camera_initial_view") as Dictionary
+		"camera.view.restore_from_motion_json":
+			var path_value := str(message.get("path", ""))
+			if path_value.is_empty():
+				return {"type": "error", "error": "camera_motion_json_path_missing"}
+			result = service.call(
+				"restore_editor_camera_initial_view_from_motion_json",
+				path_value,
+				str(message.get("target_node", "")),
+				clampi(int(message.get("viewport_index", 0)), 0, 3)
+			) as Dictionary
 		"camera.program.load":
 			var program_value = message.get("program")
 			if not program_value is Dictionary:
@@ -581,6 +592,7 @@ func _camera_response_type(message_type: String) -> String:
 		"camera.follow.stop": return "camera.follow.stopped"
 		"camera.view.set": return "camera.view.set"
 		"camera.view.restore": return "camera.view.restored"
+		"camera.view.restore_from_motion_json": return "camera.view.restored_from_motion_json"
 		"camera.program.load": return "camera.program.loaded"
 		"camera.program.play": return "camera.program.playing"
 		"camera.program.pause": return "camera.program.paused"
@@ -733,7 +745,18 @@ func _capture_message(message: Dictionary) -> Dictionary:
 		return {"type": "error", "error": "skeleton_not_found", "skeleton_path": str(skeleton_path)}
 
 	var bones: Dictionary = {}
+	# Return the hierarchy alongside the keyed pose values.  A pose document may
+	# have been authored for a smaller rig, while the live character can contain
+	# optional deformation bones (for example Female190's CPR breast/abdomen
+	# bones).  Emacs uses this list to keep the document's top-level rig metadata
+	# in sync with the skeleton that was actually captured.
+	var rig_bones: Array[Dictionary] = []
 	for bone_idx in skeleton.get_bone_count():
+		var parent_idx := skeleton.get_bone_parent(bone_idx)
+		rig_bones.append({
+			"name": str(skeleton.get_bone_name(bone_idx)),
+			"parent": null if parent_idx < 0 else str(skeleton.get_bone_name(parent_idx)),
+		})
 		var rotation := skeleton.get_bone_pose_rotation(bone_idx).normalized()
 		var position := skeleton.get_bone_pose_position(bone_idx)
 		var scale := skeleton.get_bone_pose_scale(bone_idx)
@@ -787,6 +810,7 @@ func _capture_message(message: Dictionary) -> Dictionary:
 		"type": "pose.captured",
 		"pose_name": pose_name,
 		"pose": captured_pose,
+		"rig_bones": rig_bones,
 		"bones_captured": skeleton.get_bone_count(),
 		"controls_captured": controls.size(),
 		"active_modifiers": active_modifier_count,

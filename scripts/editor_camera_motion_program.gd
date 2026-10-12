@@ -13,13 +13,19 @@ var duration_seconds := 0.0
 var loop := false
 var name := "unnamed_camera_program"
 var base_relative := Transform3D.IDENTITY
+var base_global := Transform3D.IDENTITY
 var final_relative := Transform3D.IDENTITY
 
 
-func configure(program: Dictionary, confirmed_relative: Transform3D) -> Dictionary:
+func configure(
+	program: Dictionary,
+	confirmed_relative: Transform3D,
+	confirmed_global: Transform3D = Transform3D.IDENTITY
+) -> Dictionary:
 	segments.clear()
 	duration_seconds = 0.0
 	base_relative = confirmed_relative
+	base_global = confirmed_global
 	final_relative = confirmed_relative
 	name = str(program.get("name", "unnamed_camera_program"))
 	loop = bool(program.get("loop", false))
@@ -68,20 +74,51 @@ func sample(time_seconds: float) -> Dictionary:
 		if sample_time <= cursor + segment_duration or index == segments.size() - 1:
 			var amount := 1.0 if segment_duration <= 0.0 else \
 				clampf((sample_time - cursor) / segment_duration, 0.0, 1.0)
-			return {
+			var sample := {
 				"transform": _sample_segment(segment, amount),
 				"finished": finished,
 				"segment_index": index,
 				"segment_amount": amount,
 			}
+			if str(segment.get("kind", "")) == "global_dolly":
+				sample["global_transform"] = _sample_global_segment(segment, amount)
+			return sample
 		cursor += segment_duration
 	return {"transform": final_relative, "finished": true, "segment_index": segments.size() - 1}
 
 
 func _compile_command(command: Dictionary, start: Transform3D, index: int) -> Dictionary:
 	var kind := str(command.get("kind", "")).to_lower()
-	if kind in ["g0", "rapid", "g1", "linear", "g5", "bezier"]:
+	if kind in ["g0", "rapid", "g1", "linear", "g1_forward", "forward", "g1_global_dolly", "g5", "bezier"]:
+		if kind == "g1_global_dolly":
+			var global_start := base_global * start
+			# Resolve the rail from the camera orientation at this exact
+			# command boundary, not from the original shot orientation.  This
+			# matters when an orbit or explicit rotation precedes the dolly.
+			var global_direction := -global_start.basis.z
+			var global_end := global_start
+			global_end.origin += global_direction.normalized() * float(command.get("distance", 0.0))
+			var relative_end := base_global.affine_inverse() * global_end
+			var global_segment := {
+				"kind": "global_dolly",
+				"start": start,
+				"end": relative_end,
+				"global_start": global_start,
+				"global_end": global_end,
+				"duration": _command_duration(command, global_start.origin, global_end.origin, false),
+				"easing": str(command.get("easing", "smooth")),
+			}
+			return {"ok": true, "segment": global_segment}
 		var target_offset := _vec3(command.get("to"), start.origin - base_relative.origin)
+		if kind in ["g1_forward", "forward"]:
+			# `direction_local` is injected by the editor service when a
+			# character target was selected.  Without it, -start.basis.z is
+			# the camera's current forward direction in work space.
+			var direction := _vec3(command.get("direction_local"), -start.basis.z)
+			if direction.length_squared() <= 0.000001:
+				direction = -start.basis.z
+			target_offset = start.origin - base_relative.origin \
+				+ direction.normalized() * float(command.get("distance", 0.0))
 		var end := Transform3D(_target_basis(command, start.basis), base_relative.origin + target_offset)
 		var duration := _command_duration(command, start.origin, end.origin, kind == "g0" or kind == "rapid")
 		var segment := {
@@ -180,6 +217,17 @@ func _sample_segment(segment: Dictionary, raw_amount: float) -> Transform3D:
 	var start_rotation := start.basis.get_rotation_quaternion()
 	var end_rotation := end.basis.get_rotation_quaternion()
 	return Transform3D(Basis(start_rotation.slerp(end_rotation, amount).normalized()), origin)
+
+
+func _sample_global_segment(segment: Dictionary, raw_amount: float) -> Transform3D:
+	var amount := _ease_amount(raw_amount, str(segment.get("easing", "smooth")))
+	var start := segment.get("global_start", base_global) as Transform3D
+	var end := segment.get("global_end", start) as Transform3D
+	var origin := start.origin.lerp(end.origin, amount)
+	var rotation := start.basis.get_rotation_quaternion().slerp(
+		end.basis.get_rotation_quaternion(), amount
+	).normalized()
+	return Transform3D(Basis(rotation), origin)
 
 
 func _cubic_bezier(a: Vector3, b: Vector3, c: Vector3, d: Vector3, t: float) -> Vector3:
